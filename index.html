@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f2eadb" />
+    <title>MusicHands — Hand Position Studio</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">MusicHands / visual study</p>
+          <h1>Put the hand<br />on the music.</h1>
+        </div>
+        <p class="lede">
+          Shape a piano hand position, then play it. The diagram responds to
+          clicks, your computer keyboard, or a connected MIDI piano.
+        </p>
+      </header>
+
+      <section class="studio" aria-label="Hand position editor">
+        <aside class="controls">
+          <div class="control-section control-section--first">
+            <div class="section-heading">
+              <span class="step-number">01</span>
+              <h2>Choose a position</h2>
+            </div>
+
+            <div class="segmented" role="group" aria-label="Choose hand">
+              <button class="segment is-active" type="button" data-hand="right">Right hand</button>
+              <button class="segment" type="button" data-hand="left">Left hand</button>
+            </div>
+
+            <label class="field">
+              <span>Starting shape</span>
+              <select id="preset-select">
+                <option value="c-position">C five-finger position</option>
+                <option value="c-chord">C major chord</option>
+                <option value="g-position">G five-finger position</option>
+                <option value="d-position">D five-finger position</option>
+                <option value="wide-chord">Wide seventh chord</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="control-section">
+            <div class="section-heading">
+              <span class="step-number">02</span>
+              <h2>Place each finger</h2>
+            </div>
+            <div id="finger-controls" class="finger-controls"></div>
+          </div>
+
+          <details class="control-section fine-tune">
+            <summary>
+              <span class="step-number">03</span>
+              <span>Fine-tune the drawing</span>
+              <span class="summary-mark" aria-hidden="true">+</span>
+            </summary>
+            <div class="fine-tune-body">
+              <label class="range-field">
+                <span>Palm height <output id="palm-height-output">44</output></span>
+                <input id="palm-height" type="range" min="28" max="68" value="44" />
+              </label>
+              <label class="range-field">
+                <span>Finger curve <output id="curve-output">52</output></span>
+                <input id="curve" type="range" min="12" max="88" value="52" />
+              </label>
+              <label class="range-field">
+                <span>Hand weight <output id="weight-output">30</output></span>
+                <input id="weight" type="range" min="22" max="40" value="30" />
+              </label>
+              <label class="check-field">
+                <input id="show-notes" type="checkbox" checked />
+                <span>Show note names</span>
+              </label>
+              <label class="check-field">
+                <input id="show-guides" type="checkbox" checked />
+                <span>Show anchor guides</span>
+              </label>
+            </div>
+          </details>
+        </aside>
+
+        <div class="workbench">
+          <div class="workbench-bar">
+            <div>
+              <p class="position-kicker" id="position-kicker">Right hand position</p>
+              <h2 id="position-title">Thumb on C4 · pinky on G4</h2>
+            </div>
+            <div class="live-status" id="live-status" data-state="idle">
+              <span class="status-dot"></span>
+              <span id="status-text">Ready to play</span>
+            </div>
+          </div>
+
+          <div class="visual-stage" id="visual-stage" aria-live="polite"></div>
+
+          <div class="play-strip">
+            <div class="play-copy">
+              <span class="play-label">PLAY IT</span>
+              <p>Click the keys, use <kbd>A</kbd>–<kbd>K</kbd>, or connect a MIDI keyboard.</p>
+            </div>
+            <div class="actions">
+              <button class="button button--primary" id="midi-button" type="button">Connect MIDI</button>
+              <button class="button" id="download-button" type="button">Download SVG</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="footer-note">
+        <span>Prototype 001</span>
+        <p>The hand drawing is generated entirely from the five note assignments above.</p>
+      </footer>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
