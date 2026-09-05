@@ -42,5 +42,7 @@ test("standalone SVG contains its drawing styles and assigned notes", () => {
   assert.match(svg, /<style>/);
   assert.match(svg, /data-note="C4"/);
   assert.match(svg, /RIGHT HAND/);
-  assert.match(svg, /rx="7.5" ry="6.4"/);
+  assert.match(svg, /class="fingernail"/);
+  assert.match(svg, /class="finger-badge"/);
+  assert.equal((svg.match(/class="finger-fill"/g) ?? []).length, 5);
 });

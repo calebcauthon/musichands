@@ -413,7 +413,6 @@ input[type="range"] {
 }
 
 .key-note,
-.key-finger,
 .finger-number,
 .anchor-guide text {
   pointer-events: none;
@@ -429,18 +428,6 @@ input[type="range"] {
 .key-note--black {
   fill: var(--paper);
   font-size: 9px;
-}
-
-.key-finger {
-  fill: var(--clay-deep);
-  font-family: var(--display);
-  font-size: 15px;
-  font-style: italic;
-  font-weight: 700;
-}
-
-.key-finger--black {
-  fill: var(--paper);
 }
 
 .anchor-guide {
@@ -460,51 +447,42 @@ input[type="range"] {
   letter-spacing: 0.1em;
 }
 
-.palm,
-.finger-fill {
+.hand,
+.hand-detail,
+.finger-badge,
+.touch-halo {
   pointer-events: none;
 }
 
-.palm {
-  fill: url(#palm-skin);
-  stroke: oklch(66% 0.065 48);
-  stroke-linejoin: round;
-  stroke-width: 1.5;
+.palm,
+.finger-fill {
+  fill: url(#hand-skin);
+  stroke: none;
 }
 
-.palm-line,
 .finger-crease {
   fill: none;
-  stroke: oklch(66% 0.065 48 / 0.58);
+  stroke: oklch(62% 0.07 42 / 0.42);
   stroke-linecap: round;
-  stroke-width: 1.35;
-}
-
-.finger-outline,
-.finger-fill {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.finger-outline {
-  stroke: oklch(66% 0.065 48);
-}
-
-.finger-fill {
-  stroke: url(#finger-skin);
+  stroke-width: 1.2;
 }
 
 .fingernail {
-  fill: oklch(91% 0.045 48);
-  stroke: oklch(70% 0.065 45);
-  stroke-width: 1;
+  fill: oklch(91% 0.035 42);
+  stroke: oklch(72% 0.06 40);
+  stroke-width: 0.9;
+}
+
+.finger-badge circle {
+  fill: var(--paper);
+  stroke: var(--clay);
+  stroke-width: 1.2;
 }
 
 .finger-number {
-  fill: oklch(43% 0.07 43);
+  fill: var(--clay-deep);
   font-family: var(--display);
-  font-size: 11px;
+  font-size: 12px;
   font-style: italic;
   font-weight: 700;
 }
@@ -513,7 +491,7 @@ input[type="range"] {
   fill: transparent;
 }
 
-.hand-finger.is-active .touch-halo {
+.touch-halo.is-active {
   fill: color-mix(in oklch, var(--gold), transparent 50%);
   filter: url(#active-glow);
 }
