@@ -91,6 +91,19 @@
             </div>
           </div>
         </div>
+        <div class="transport" role="group" aria-label="Play the score">
+          <button class="button button--primary" type="button" id="play-score" title="Play the score from here (P)">▶ Play</button>
+          <label class="slider-field" title="How fast the music plays, in quarter notes a minute">
+            <span>Tempo</span>
+            <input id="tempo" type="range" min="30" max="240" step="1" value="120" />
+            <output id="tempo-output">120</output>
+          </label>
+          <label class="slider-field" title="How quickly the hands move and strike">
+            <span>Reflexes</span>
+            <input id="reflex" type="range" min="0.5" max="4" step="0.25" value="1" />
+            <output id="reflex-output">1×</output>
+          </label>
+        </div>
         <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
         <div class="hands-captions">
           <p id="left-hand-caption" class="hand-caption" data-hand="left">Left hand</p>
@@ -112,7 +125,7 @@
       </section>
 
       <footer class="footer-note">
-        <span>Use ← and → to move through the piece, Space to hear the moment again. Click a key to play it, or a position card to jump there.</span>
+        <span>Use ← and → to move through the piece, P to play it, Space to hear the moment again. Click a key to play it, or a position card to jump there.</span>
         <span>Fingering: score marks first, then <code>scores/*.fingering.json</code>, then a guess.</span>
       </footer>
       <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>

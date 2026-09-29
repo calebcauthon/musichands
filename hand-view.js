@@ -12,8 +12,18 @@ class StageView {
   }
 
   // Returns the milliseconds until any struck keys land.
-  setHands(hands, { immediate = false } = {}) {
-    return this.stage.setHands(hands, { immediate });
+  setHands(hands, { immediate = false, landIn = null } = {}) {
+    return this.stage.setHands(hands, { immediate, landIn });
+  }
+
+  // How many times faster than usual the hands move.
+  setSpeed(speed) {
+    this.stage.setOptions({ speed });
+  }
+
+  // The longest, in ms, a strike takes at the current speed.
+  get reach() {
+    return this.stage.reach;
   }
 
   setSounding(midis) {
@@ -80,6 +90,13 @@ class FlatView {
   setSounding(midis) {
     this.sounding = [...midis];
     this.single?.setActiveMidis(this.sounding);
+  }
+
+  // The flat drawing does not move, so there is nothing to speed up.
+  setSpeed() {}
+
+  get reach() {
+    return 0;
   }
 
   setOptions(options) {

@@ -1102,3 +1102,39 @@ kbd {
   font-size: clamp(1.6rem, 4vw, 3rem);
   pointer-events: none;
 }
+
+/* Playing the score: the play button, tempo and reflexes. */
+.transport {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-lg);
+  margin-bottom: var(--space-sm);
+}
+
+.transport .button {
+  min-width: 6.2rem;
+  min-height: 34px;
+  padding-block: 0;
+}
+
+.slider-field {
+  display: flex;
+  flex: 1 1 14rem;
+  align-items: center;
+  gap: var(--space-xs);
+  max-width: 22rem;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.slider-field output {
+  min-width: 2.6rem;
+  font-size: 0.85rem;
+  letter-spacing: 0;
+  text-align: right;
+  text-transform: none;
+}

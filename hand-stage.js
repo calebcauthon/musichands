@@ -37,6 +37,7 @@ const COLORS = {
 };
 const KEY_LAG = 30; // ms between a finger starting down and its key following
 const KEY_FALL = 25; // ms for a key to reach the bottom, where a piano sounds
+const PRESS = 95; // ms for a lifted finger to come down
 const CAMERA = { fov: 27, elevation: 72, target: [0.018, -0.002], depth: 0.275, minWidth: 0.5, margin: 0.13 };
 
 // The last pass: darkened corners and a little grain, as from a lens and film.
@@ -406,7 +407,8 @@ class HandActor {
 export class HandStage {
   constructor(element, options = {}) {
     this.element = element;
-    this.options = { interactive: false, showNotes: true, showBadges: true, curl: 0, lift: 0, scale: 1, snapshot: false, ...options };
+    this.options = { interactive: false, showNotes: true, showBadges: true, curl: 0, lift: 0, scale: 1, speed: 1, snapshot: false, ...options };
+    this.pace = 1; // how much faster than usual the keys are moving right now
     this.hands = {};
     this.requests = { left: null, right: null };
     this.solved = new Map();
@@ -669,10 +671,17 @@ export class HandStage {
     this.invalidate();
   }
 
+  // How long, in ms, a strike takes at its longest at the current speed.
+  get reach() {
+    return (480 + KEY_LAG + KEY_FALL) / this.options.speed;
+  }
+
   // specs: { left, right }, each { fingers: [{ finger, note }], activeMidis: [], strike: bool },
   // or null to withdraw that hand. Returns how many milliseconds from now the
-  // struck keys will land, so sound can be timed to the fingers.
-  setHands(specs, { immediate = false } = {}) {
+  // struck keys will land, so sound can be timed to the fingers. With `landIn`
+  // the strike is timed to land that many milliseconds from now: the hands
+  // wait if that is more time than they need, and hurry if it is less.
+  setHands(specs, { immediate = false, landIn = null } = {}) {
     if (this.stillOnly) immediate = true;
     for (const side of SIDES) {
       const spec = specs[side];
@@ -685,15 +694,30 @@ export class HandStage {
       if (plan) plans.push(plan);
     }
     let landing = 0;
+    this.pace = this.options.speed;
     if (plans.length) {
       // Hands that strike together land together, however far each had to travel.
-      const travel = Math.max(...plans.map((plan) => plan.travel));
-      const down = performance.now() + travel + KEY_LAG;
+      let travel = Math.max(...plans.map((plan) => plan.travel));
+      let [lag, fall, press] = [KEY_LAG, KEY_FALL, PRESS].map((ms) => ms / this.options.speed);
+      let wait = 0;
+      if (landIn !== null) {
+        const natural = travel + lag + fall;
+        if (landIn < natural) {
+          const squeeze = Math.max(landIn, 24) / natural;
+          [travel, lag, fall, press] = [travel, lag, fall, press].map((ms) => ms * squeeze);
+          this.pace = this.options.speed / squeeze;
+        } else {
+          wait = landIn - natural;
+        }
+      }
+      const down = performance.now() + wait + travel + lag;
       for (const plan of plans) {
         plan.approach.duration = travel;
+        plan.press.duration = press;
+        if (wait > 1) plan.actor.segments.unshift({ from: plan.approach.from, to: plan.approach.from, duration: wait, ease: easeInOut, arc: 0 });
         for (const midi of plan.keys) this.keys.get(midi).delay = down;
       }
-      landing = travel + KEY_LAG + KEY_FALL;
+      landing = wait + travel + lag + fall;
     }
     this.frameCamera(immediate);
     this.invalidate();
@@ -748,7 +772,7 @@ export class HandStage {
       const away = { pose: actor.state.pose.slice(), scale: actor.state.scale };
       away.pose[1] += 0.05;
       away.pose[2] += 0.22;
-      actor.segments = [{ from: actor.state, to: away, duration: 420, ease: easeInOut, arc: 0, done: () => { actor.root.visible = false; actor.state = null; } }];
+      actor.segments = [{ from: actor.state, to: away, duration: 420 / this.options.speed, ease: easeInOut, arc: 0, done: () => { actor.root.visible = false; actor.state = null; } }];
       return null;
     }
     const midiOf = new Map(request.fingers.map((entry) => [entry.finger, noteToMidi(entry.note)]));
@@ -779,10 +803,12 @@ export class HandStage {
       return null;
     }
     const lifted = strikes ? this.solve(side, request, liftedStates) : null;
+    const speed = this.options.speed;
     const strikeFrom = (from, duration, arc) => {
       const approach = { from, to: lifted, duration, ease: easeInOut, arc };
-      actor.segments = [approach, { from: lifted, to: pressed, duration: 95, ease: easeIn, arc: 0 }];
-      return { approach, travel: duration, keys: struckKeys };
+      const press = { from: lifted, to: pressed, duration: PRESS / speed, ease: easeIn, arc: 0 };
+      actor.segments = [approach, press];
+      return { actor, approach, press, travel: duration, keys: struckKeys };
     };
     if (!actor.state) {
       // The hand comes in from the player's side.
@@ -790,8 +816,8 @@ export class HandStage {
       entering.pose[1] += 0.05;
       entering.pose[2] += 0.22;
       actor.apply(entering);
-      if (strikes) return strikeFrom(entering, 520, 0);
-      actor.segments = [{ from: entering, to: pressed, duration: 520, ease: easeInOut, arc: 0 }];
+      if (strikes) return strikeFrom(entering, 520 / speed, 0);
+      actor.segments = [{ from: entering, to: pressed, duration: 520 / speed, ease: easeInOut, arc: 0 }];
       return null;
     }
     if (samePlace && !request.strike && !settle) return null;
@@ -799,8 +825,8 @@ export class HandStage {
     const from = { pose: actor.state.pose.slice(), scale: actor.state.scale };
     const travel = Math.hypot(pressed.pose[0] - from.pose[0], pressed.pose[2] - from.pose[2]);
     const arc = clamp(travel * 0.22, 0, 0.022);
-    if (strikes) return strikeFrom(from, clamp(170 + travel * 1500, 170, 480), arc);
-    actor.segments = [{ from, to: pressed, duration: clamp(120 + travel * 1500, 120, 480), ease: easeInOut, arc }];
+    if (strikes) return strikeFrom(from, clamp(170 + travel * 1500, 170, 480) / speed, arc);
+    actor.segments = [{ from, to: pressed, duration: clamp(120 + travel * 1500, 120, 480) / speed, ease: easeInOut, arc }];
     return null;
   }
 
@@ -846,8 +872,8 @@ export class HandStage {
         if (Math.abs(target - value) < 0.002) return target;
         return value + (target - value) * (1 - Math.exp(-delta * rate));
       };
-      const dip = follow(entry.dip, dipTarget, dipTarget > entry.dip ? 0.045 : 0.02);
-      const glow = follow(entry.glow, glowTarget, 0.02);
+      const dip = follow(entry.dip, dipTarget, (dipTarget > entry.dip ? 0.045 : 0.02) * this.pace);
+      const glow = follow(entry.glow, glowTarget, 0.02 * this.pace);
       const tint = follow(entry.tint, entry.tintTarget, 0.012);
       if (dip !== entry.dip || glow !== entry.glow || tint !== entry.tint || waiting) {
         entry.dip = dip;

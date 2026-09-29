@@ -6,6 +6,7 @@ import { PianoAudio } from "./piano-audio.js";
 import { readMxl } from "./mxl.js";
 import { getScore, listScores, removeScore, saveScore } from "./score-library.js";
 import { parseScore } from "./score-model.js";
+import { ScoreTransport } from "./score-transport.js";
 
 const scoreSelect = document.querySelector("#score-select");
 const scoreFile = document.querySelector("#score-file");
@@ -29,6 +30,12 @@ const DEFAULT_TEMPO = 120; // quarter notes a minute, for scores that do not sta
 const importedScores = document.querySelector("#imported-scores");
 const libraryActions = document.querySelector("#library-actions");
 const dropHint = document.querySelector("#drop-hint");
+const handsPanel = document.querySelector(".hands-panel");
+const playScore = document.querySelector("#play-score");
+const tempoSlider = document.querySelector("#tempo");
+const tempoOutput = document.querySelector("#tempo-output");
+const reflexSlider = document.querySelector("#reflex");
+const reflexOutput = document.querySelector("#reflex-output");
 const captions = {
   right: document.querySelector("#right-hand-caption"),
   left: document.querySelector("#left-hand-caption"),
@@ -54,6 +61,8 @@ const state = {
   showGuides: true,
   clicked: new Set(), // keys held down by the pointer
   replay: null, // notes the play buttons are holding, or null
+  tempo: DEFAULT_TEMPO, // quarter notes a minute, as set on the slider
+  cursorAt: null, // the score time the notation cursor was last moved to
 };
 
 function setStatus(message, stateName = "idle") {
@@ -125,7 +134,7 @@ function momentAt(step) {
 // Puts the hands on the stage for the current step. The play buttons and the
 // pointer can both press keys on top of what the score holds down. Returns the
 // milliseconds until struck keys land.
-function showHands({ jump = false, strike = true } = {}) {
+function showHands({ jump = false, strike = true, landIn = null } = {}) {
   const step = state.steps[state.stepIndex];
   if (!step) return 0;
   const moment = momentAt(step);
@@ -139,10 +148,12 @@ function showHands({ jump = false, strike = true } = {}) {
     hands[hand] = { fingers: position.fingers, activeMidis: active, strike: strike && (state.replay ? active.length > 0 : striking) };
   }
   handsView.setSounding([...state.clicked, ...(state.replay ?? [])].filter((midi) => !underFinger.has(midi)));
-  return handsView.setHands(hands, { immediate: jump });
+  return handsView.setHands(hands, { immediate: jump, landIn });
 }
 
-function renderHands({ jump = false, sound = false } = {}) {
+// landIn is set while the score is playing: the notes must land that many
+// milliseconds from now, on their beat.
+function renderHands({ jump = false, sound = false, landIn = null } = {}) {
   const step = state.steps[state.stepIndex];
   if (!step) return;
   const beat = Number.isInteger(step.beat) ? step.beat : step.beat.toFixed(2).replace(/0+$/, "");
@@ -162,16 +173,19 @@ function renderHands({ jump = false, sound = false } = {}) {
     if (entry.event) sources.add(entry.event.fingeringSource);
   });
   player.stop();
-  const landing = showHands({ jump });
+  const landing = showHands({ jump, landIn });
+  const playing = landIn !== null;
   if (sound) {
     // Notes still held from before keep ringing; everything else is damped.
+    // While the score plays, each note ends on its own and is left to.
     const held = Object.values(moment).flatMap((entry) => (entry.striking ? [] : entry.sounding));
-    audio.releaseAll({ except: held });
+    if (!playing) audio.releaseAll({ except: held });
     for (const entry of Object.values(moment)) {
       if (!entry.striking) continue;
+      const written = (entry.event.duration * 60000) / state.tempo;
       // Stepping by hand is slower than the music, so let short notes ring long enough to hear.
-      const duration = Math.min(4000, Math.max(1200, (entry.event.duration * 60000) / (state.score.tempo ?? DEFAULT_TEMPO)));
-      for (const midi of entry.sounding) audio.noteOn(midi, { delay: landing, duration });
+      const duration = playing ? Math.max(140, written) : Math.min(4000, Math.max(1200, written));
+      for (const midi of entry.sounding) audio.noteOn(midi, { delay: playing ? landIn : landing, duration });
     }
   }
   const playable = Object.values(moment).some((entry) => entry.sounding.length);
@@ -200,7 +214,9 @@ function moveCursorTo(time) {
   const cursor = osmd.cursor;
   // OSMD measures time in whole notes; the model uses quarter notes.
   const target = time / 4 - 1e-6;
-  cursor.reset();
+  // Going forward carries on from where the cursor is; going back starts over.
+  if (state.cursorAt === null || time < state.cursorAt) cursor.reset();
+  state.cursorAt = time;
   let guard = 0;
   while (!cursor.iterator.EndReached && cursor.iterator.currentTimeStamp.RealValue < target && guard < 5000) {
     cursor.next();
@@ -208,10 +224,17 @@ function moveCursorTo(time) {
   }
   cursor.show();
   const cursorElement = cursor.cursorElement;
-  if (cursorElement) cursorElement.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (!cursorElement) return;
+  // Keep the cursor in the part of the window the hands panel does not cover.
+  const box = cursorElement.getBoundingClientRect();
+  const floor = Math.min(window.innerHeight, handsPanel.getBoundingClientRect().top);
+  const comfortable = box.top > 70 && box.bottom < floor - 30;
+  if (!comfortable) window.scrollBy({ top: box.top + box.height / 2 - floor / 2, behavior: "smooth" });
 }
 
+// Moving through the score by hand. Playing the score goes through the transport.
 function goToStep(index, { jump = false } = {}) {
+  stopPlaying();
   state.stepIndex = Math.max(0, Math.min(state.steps.length - 1, index));
   renderHands({ jump, sound: !jump });
   moveCursorTo(state.steps[state.stepIndex].time);
@@ -275,10 +298,12 @@ async function renderNotation(xmlText) {
     const render = state.osmd.render.bind(state.osmd);
     state.osmd.render = () => {
       render();
+      state.cursorAt = null;
       drawStaffGuides();
     };
   }
   await state.osmd.load(xmlText);
+  state.cursorAt = null;
   state.osmd.render();
   state.osmd.cursor.show();
 }
@@ -420,7 +445,9 @@ async function loadScore(xmlText, { overrideUrl = null, label = "score", notes =
     setStatus(`Could not read ${label}: ${error.message}`, "outside");
     return false;
   }
+  stopPlaying();
   state.xml = xmlText;
+  setTempo(state.score.tempo ?? DEFAULT_TEMPO);
   const overrides = await loadOverrides(overrideUrl);
   const fingered = assignFingering(state.score.events, { overrides });
   state.events = fingered.events;
@@ -550,6 +577,7 @@ const player = new HandPlayer({
 function replay(mode) {
   const step = state.steps[state.stepIndex];
   if (!step) return;
+  stopPlaying();
   if (player.mode === mode) {
     player.stop();
     return;
@@ -563,6 +591,65 @@ function replay(mode) {
 }
 
 for (const [mode, button] of Object.entries(playButtons)) button.addEventListener("click", () => replay(mode));
+
+// Playing the score through at the tempo on the slider.
+const transport = new ScoreTransport({
+  steps: () => state.steps,
+  tempo: () => state.tempo,
+  reach: () => handsView.reach,
+  perform: (index, landIn) => {
+    state.stepIndex = index;
+    renderHands({ sound: true, landIn });
+    moveCursorTo(state.steps[index].time);
+  },
+  tail: (index) => Math.max(...state.steps[index].events.map((event) => (event.duration * 60000) / state.tempo)),
+  done: () => showPlaying(false),
+});
+
+function showPlaying(playing) {
+  playScore.textContent = playing ? "■ Stop" : "▶ Play";
+  playScore.classList.toggle("is-playing", playing);
+}
+
+function stopPlaying() {
+  if (!transport.playing) return;
+  transport.stop();
+  audio.releaseAll();
+  showPlaying(false);
+}
+
+function togglePlaying() {
+  if (transport.playing) {
+    stopPlaying();
+    return;
+  }
+  if (!state.steps.length) return;
+  player.stop();
+  // From the end, play again from the top.
+  const from = state.stepIndex >= state.steps.length - 1 ? 0 : state.stepIndex;
+  transport.start(from);
+  showPlaying(true);
+}
+
+function setTempo(tempo) {
+  const previous = state.tempo;
+  state.tempo = Math.min(Number(tempoSlider.max), Math.max(Number(tempoSlider.min), Math.round(tempo)));
+  tempoSlider.value = state.tempo;
+  tempoOutput.value = state.tempo;
+  transport.retime(previous);
+}
+
+function setReflexes(speed) {
+  reflexSlider.value = speed;
+  reflexOutput.value = `${Number(reflexSlider.value)}×`;
+  handsView.setSpeed(Number(reflexSlider.value));
+  localStorage.setItem("musichands-reflexes", reflexSlider.value);
+}
+
+playScore.addEventListener("click", togglePlaying);
+tempoSlider.addEventListener("input", () => setTempo(Number(tempoSlider.value)));
+reflexSlider.addEventListener("input", () => setReflexes(Number(reflexSlider.value)));
+setReflexes(Number(localStorage.getItem("musichands-reflexes")) || 1);
 
 soundToggle.checked = audio.enabled;
 soundToggle.addEventListener("change", () => {
@@ -640,12 +727,16 @@ document.querySelector("#step-prev").addEventListener("click", () => goToStep(st
 document.querySelector("#step-next").addEventListener("click", () => goToStep(state.stepIndex + 1));
 
 window.addEventListener("keydown", (event) => {
-  if (event.target.matches("input, select, button, textarea")) return;
+  // Leave typing and sliders alone, and let Space and Enter press a focused button.
+  if (event.target.matches("input, select, textarea")) return;
+  if (event.target.matches("button, summary, a") && (event.key === " " || event.key === "Enter")) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "ArrowRight") goToStep(state.stepIndex + 1);
   else if (event.key === "ArrowLeft") goToStep(state.stepIndex - 1);
   else if (event.key === "Home") goToStep(0);
   else if (event.key === "End") goToStep(state.steps.length - 1);
   else if (event.key === " ") replay(event.shiftKey ? "succession" : "together");
+  else if (event.key === "p" || event.key === "P") togglePlaying();
   else return;
   event.preventDefault();
 });
