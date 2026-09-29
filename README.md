@@ -52,7 +52,7 @@ A note tied over from before is held, not played again: its finger stays down, i
 
 Step through the piece with the arrow keys or the Next button, click a measure in the score, or click a position card to jump. Each step sounds the notes struck at that moment. Space replays the moment together, Shift + Space one note at a time, and the Sound switch turns it all off.
 
-Scores live in `scores/`. The bundled `roundball-rock.musicxml` came from a MuseScore export and carries no fingerings, so nearly every position there is a guess until the sidecar file fills them in.
+Scores live in `scores/`. The two that come with the app, both versions of Minor Descent, were written for it. Bring in anything else with "Import a score…"; imported scores stay in your browser and are not part of this repository.
 
 ## Importing scores
 

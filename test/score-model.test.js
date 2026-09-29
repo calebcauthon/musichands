@@ -142,15 +142,15 @@ test("positions group notes that fit under one hand and split when they do not",
   assert.deepEqual(split[2].fingers, [{ finger: 5, note: "C4" }]);
 });
 
-test("parses the bundled Roundball Rock score end to end", () => {
-  const xml = readFileSync(new URL("../scores/roundball-rock.musicxml", import.meta.url), "utf8");
+test("parses a bundled score end to end", () => {
+  const xml = readFileSync(new URL("../scores/minor-descent.musicxml", import.meta.url), "utf8");
   const score = parseScore(xml);
-  assert.equal(score.measures.length, 68);
-  assert.ok(score.events.length > 600);
+  assert.equal(score.measures.length, 4);
+  assert.ok(score.events.length > 10);
   const { events, positions } = assignFingering(score.events);
   assert.ok(events.every((event) => event.notes.every((note) => note.finger)));
   assert.ok(events.every((event) => new Set(event.notes.map((note) => note.finger)).size === event.notes.length));
-  assert.ok(positions.right.length > 5 && positions.right.length < events.length / 3);
+  assert.ok(positions.right.length >= 1 && positions.right.length < events.length);
   positions.right.forEach((position) => {
     const midis = position.fingers.map((entry) => noteToMidi(entry.note));
     assert.ok(Math.max(...midis) - Math.min(...midis) <= 12);
@@ -158,10 +158,10 @@ test("parses the bundled Roundball Rock score end to end", () => {
 });
 
 test("reads a compressed .mxl archive", async () => {
-  const xml = readFileSync(new URL("../scores/roundball-rock.musicxml", import.meta.url));
+  const xml = readFileSync(new URL("../scores/minor-descent.musicxml", import.meta.url));
   const stored = zipStored("score.musicxml", xml);
   const text = await readMxl(stored);
-  assert.equal(parseScore(text).measures.length, 68);
+  assert.equal(parseScore(text).measures.length, 4);
 });
 
 // A minimal uncompressed zip writer so the test does not depend on a zip tool.
