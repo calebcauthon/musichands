@@ -35,6 +35,8 @@ const COLORS = {
   sleeve: 0x0d0d10,
   cuff: 0xf2efe8,
 };
+const KEY_LAG = 30; // ms between a finger starting down and its key following
+const KEY_FALL = 25; // ms for a key to reach the bottom, where a piano sounds
 const CAMERA = { fov: 27, elevation: 72, target: [0.018, -0.002], depth: 0.275, minWidth: 0.5, margin: 0.13 };
 
 // The last pass: darkened corners and a little grain, as from a lens and film.
@@ -365,7 +367,10 @@ class HandActor {
   apply(state) {
     this.state = state;
     const { hand, joints, balls, reach } = poseMatrices(this.rig, state.pose, state.scale);
-    this.reach = reach;
+    this.reach = {};
+    for (const [finger, point] of Object.entries(reach)) {
+      this.reach[finger] = new THREE.Vector3(this.mirror ? -point[0] : point[0], point[1], point[2]);
+    }
     const flip = this.mirror ? mat4.multiply(mat4.scaling([-1, 1, 1]), hand) : hand;
     this.root.matrix.fromArray(flip);
     this.root.matrixWorldNeedsUpdate = true;
@@ -659,19 +664,40 @@ export class HandStage {
     this.overlay.hidden = !this.options.showBadges;
     if (before !== JSON.stringify([this.options.curl, this.options.lift, this.options.scale])) {
       this.solved.clear();
-      for (const side of SIDES) if (this.requests[side]) this.place(side, this.requests[side], { settle: true });
+      for (const side of SIDES) if (this.requests[side]) this.place(side, { ...this.requests[side], strike: false }, { settle: true });
     }
     this.invalidate();
   }
 
-  // spec: { fingers: [{ finger, note }], activeMidis: [], strike: bool } or null to withdraw the hand.
-  setHand(side, spec, { immediate = false } = {}) {
+  // specs: { left, right }, each { fingers: [{ finger, note }], activeMidis: [], strike: bool },
+  // or null to withdraw that hand. Returns how many milliseconds from now the
+  // struck keys will land, so sound can be timed to the fingers.
+  setHands(specs, { immediate = false } = {}) {
     if (this.stillOnly) immediate = true;
-    this.requests[side] = spec ? { fingers: spec.fingers.map((entry) => ({ ...entry })), activeMidis: [...(spec.activeMidis ?? [])].map(Number), strike: Boolean(spec.strike) } : null;
+    for (const side of SIDES) {
+      const spec = specs[side];
+      this.requests[side] = spec ? { fingers: spec.fingers.map((entry) => ({ ...entry })), activeMidis: [...(spec.activeMidis ?? [])].map(Number), strike: Boolean(spec.strike) } : null;
+    }
     this.refreshKeys(immediate);
-    if (this.hands[side]) this.place(side, this.requests[side], { immediate });
+    const plans = [];
+    for (const side of SIDES) {
+      const plan = this.hands[side] ? this.place(side, this.requests[side], { immediate }) : null;
+      if (plan) plans.push(plan);
+    }
+    let landing = 0;
+    if (plans.length) {
+      // Hands that strike together land together, however far each had to travel.
+      const travel = Math.max(...plans.map((plan) => plan.travel));
+      const down = performance.now() + travel + KEY_LAG;
+      for (const plan of plans) {
+        plan.approach.duration = travel;
+        for (const midi of plan.keys) this.keys.get(midi).delay = down;
+      }
+      landing = travel + KEY_LAG + KEY_FALL;
+    }
     this.frameCamera(immediate);
     this.invalidate();
+    return landing;
   }
 
   // Keys that sound without a hand on them (a click, or a note outside the position).
@@ -704,9 +730,12 @@ export class HandStage {
     return result;
   }
 
+  // Queues the move to a request. When fingers are about to strike, returns
+  // { approach, travel, keys }: the move that brings them over the keys, how
+  // long it takes, and which keys they will press.
   place(side, request, { immediate = false, settle = false } = {}) {
     const actor = this.hands[side];
-    if (!actor) return;
+    if (!actor) return null;
     if (!request) {
       actor.targets = [];
       actor.key = "";
@@ -714,13 +743,13 @@ export class HandStage {
       if (immediate || !actor.root.visible || !actor.state) {
         actor.segments = [];
         actor.root.visible = false;
-        return;
+        return null;
       }
       const away = { pose: actor.state.pose.slice(), scale: actor.state.scale };
       away.pose[1] += 0.05;
       away.pose[2] += 0.22;
       actor.segments = [{ from: actor.state, to: away, duration: 420, ease: easeInOut, arc: 0, done: () => { actor.root.visible = false; actor.state = null; } }];
-      return;
+      return null;
     }
     const midiOf = new Map(request.fingers.map((entry) => [entry.finger, noteToMidi(entry.note)]));
     const active = new Set(request.activeMidis);
@@ -742,37 +771,37 @@ export class HandStage {
     actor.key = key;
     actor.root.visible = true;
 
-    if (immediate || !actor.state) {
+    const strikes = request.strike && Object.keys(liftedStates).length > 0;
+    const struckKeys = actor.targets.filter((target) => liftedStates[target.finger]).map((target) => target.midi);
+    if (immediate) {
       actor.segments = [];
-      if (!immediate && !actor.state) {
-        const entering = { pose: pressed.pose.slice(), scale: pressed.scale };
-        entering.pose[1] += 0.05;
-        entering.pose[2] += 0.22;
-        actor.apply(entering);
-        actor.segments = [{ from: entering, to: pressed, duration: 520, ease: easeInOut, arc: 0 }];
-      } else {
-        actor.apply({ pose: pressed.pose.slice(), scale: pressed.scale });
-      }
-      return;
+      actor.apply({ pose: pressed.pose.slice(), scale: pressed.scale });
+      return null;
     }
-    if (samePlace && !request.strike && !settle) return;
+    const lifted = strikes ? this.solve(side, request, liftedStates) : null;
+    const strikeFrom = (from, duration, arc) => {
+      const approach = { from, to: lifted, duration, ease: easeInOut, arc };
+      actor.segments = [approach, { from: lifted, to: pressed, duration: 95, ease: easeIn, arc: 0 }];
+      return { approach, travel: duration, keys: struckKeys };
+    };
+    if (!actor.state) {
+      // The hand comes in from the player's side.
+      const entering = { pose: pressed.pose.slice(), scale: pressed.scale };
+      entering.pose[1] += 0.05;
+      entering.pose[2] += 0.22;
+      actor.apply(entering);
+      if (strikes) return strikeFrom(entering, 520, 0);
+      actor.segments = [{ from: entering, to: pressed, duration: 520, ease: easeInOut, arc: 0 }];
+      return null;
+    }
+    if (samePlace && !request.strike && !settle) return null;
 
     const from = { pose: actor.state.pose.slice(), scale: actor.state.scale };
     const travel = Math.hypot(pressed.pose[0] - from.pose[0], pressed.pose[2] - from.pose[2]);
-    const strikes = request.strike && Object.keys(liftedStates).length > 0;
-    if (strikes) {
-      const lifted = this.solve(side, request, liftedStates);
-      const duration = clamp(170 + travel * 1500, 170, 480);
-      for (const target of actor.targets) {
-        if (liftedStates[target.finger]) this.keys.get(target.midi).delay = performance.now() + duration + 30;
-      }
-      actor.segments = [
-        { from, to: lifted, duration, ease: easeInOut, arc: clamp(travel * 0.22, 0, 0.022) },
-        { from: lifted, to: pressed, duration: 95, ease: easeIn, arc: 0 },
-      ];
-    } else {
-      actor.segments = [{ from, to: pressed, duration: clamp(120 + travel * 1500, 120, 480), ease: easeInOut, arc: clamp(travel * 0.22, 0, 0.022) }];
-    }
+    const arc = clamp(travel * 0.22, 0, 0.022);
+    if (strikes) return strikeFrom(from, clamp(170 + travel * 1500, 170, 480), arc);
+    actor.segments = [{ from, to: pressed, duration: clamp(120 + travel * 1500, 120, 480), ease: easeInOut, arc }];
+    return null;
   }
 
   refreshKeys(immediate) {
@@ -891,7 +920,9 @@ export class HandStage {
       for (const target of actor.targets) {
         const ball = actor.balls[target.finger];
         if (!ball) continue;
-        const point = new THREE.Vector3(ball.x, ball.y + 0.004, actor.reach[target.finger] - 0.017).project(this.camera);
+        // Just past the furthest part of the finger, at that part's own height,
+        // so the number clears the finger from wherever the camera sits.
+        const point = actor.reach[target.finger].clone().add(new THREE.Vector3(0, 0, -0.016)).project(this.camera);
         points.push({ id: `${side}-${target.finger}`, finger: target.finger, x: ((point.x + 1) / 2) * this.width, y: ((1 - point.y) / 2) * this.height });
       }
     }

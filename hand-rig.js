@@ -167,13 +167,14 @@ export function poseMatrices(rig, pose, scale = 1) {
   }
   const hand = handMatrix(pose, scale);
   const balls = {};
-  // How far up the keyboard each finger reaches: a curled finger's middle
-  // joint can sit further in than its tip.
+  // The point on each finger furthest up the keyboard: a curled finger's
+  // middle joint can sit further in than its tip.
   const reach = {};
   for (const finger of FINGERS) {
     const points = fingerPoints(rig, finger, pose, hand);
     balls[finger] = points.ball;
-    reach[finger] = Math.min(points.ball[2], ...points.joints.map((joint) => joint[2])) - rig.fingers[finger].radius * scale;
+    const furthest = [points.ball, ...points.joints].reduce((best, point) => (point[2] < best[2] ? point : best));
+    reach[finger] = [furthest[0], furthest[1], furthest[2] - rig.fingers[finger].radius * scale];
   }
   return { hand, joints, balls, reach };
 }

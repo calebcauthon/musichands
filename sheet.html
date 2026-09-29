@@ -71,7 +71,17 @@
             <p class="position-kicker" id="hands-kicker">Measure 1 · beat 1</p>
             <h2 id="hands-title">Both hands</h2>
           </div>
-          <p class="fingering-note" id="fingering-note"></p>
+          <div class="play-controls">
+            <p class="fingering-note" id="fingering-note"></p>
+            <div class="play-buttons" role="group" aria-label="Hear this moment">
+              <button class="button" type="button" id="play-together" title="Play these notes together (Space)">Together</button>
+              <button class="button" type="button" id="play-succession" title="Play these notes one finger at a time (Shift + Space)">One by one</button>
+              <label class="check-field sound-toggle">
+                <input id="sound-toggle" type="checkbox" checked />
+                <span>Sound</span>
+              </label>
+            </div>
+          </div>
         </div>
         <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
         <div class="hands-captions">
@@ -94,7 +104,7 @@
       </section>
 
       <footer class="footer-note">
-        <span>Use ← and → to move through the piece. Click any position card to jump there.</span>
+        <span>Use ← and → to move through the piece, Space to hear the moment again. Click a key to play it, or a position card to jump there.</span>
         <span>Fingering: score marks first, then <code>scores/*.fingering.json</code>, then a guess.</span>
       </footer>
     </main>

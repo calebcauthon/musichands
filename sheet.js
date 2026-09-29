@@ -1,5 +1,8 @@
 import { assignFingering } from "./fingering.js";
+import { noteToMidi } from "./hand-model.js";
+import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
+import { PianoAudio } from "./piano-audio.js";
 import { readMxl } from "./mxl.js";
 import { parseScore } from "./score-model.js";
 
@@ -12,7 +15,15 @@ const statusText = document.querySelector("#sheet-status-text");
 const handsKicker = document.querySelector("#hands-kicker");
 const handsTitle = document.querySelector("#hands-title");
 const fingeringNote = document.querySelector("#fingering-note");
-const handsView = await createHandView(document.querySelector("#hands-stage"));
+const handsStage = document.querySelector("#hands-stage");
+const handsView = await createHandView(handsStage, { interactive: true });
+const audio = new PianoAudio({ enabled: localStorage.getItem("musichands-sound") !== "off" });
+const soundToggle = document.querySelector("#sound-toggle");
+const playButtons = {
+  together: document.querySelector("#play-together"),
+  succession: document.querySelector("#play-succession"),
+};
+const TEMPO = 120; // quarter notes a minute, until the score's own tempo is read
 const captions = {
   right: document.querySelector("#right-hand-caption"),
   left: document.querySelector("#left-hand-caption"),
@@ -36,6 +47,8 @@ const state = {
   stepIndex: 0,
   osmd: null,
   showGuides: true,
+  clicked: new Set(), // keys held down by the pointer
+  replay: null, // notes the play buttons are holding, or null
 };
 
 function setStatus(message, stateName = "idle") {
@@ -90,30 +103,76 @@ function eventAt(hand, time) {
   return found;
 }
 
-function renderHands({ jump = false } = {}) {
+// What each hand is doing at a step: where it sits, which notes it holds, and
+// which of those it strikes at that very moment.
+function momentAt(step) {
+  const moment = {};
+  ["right", "left"].forEach((hand) => {
+    const position = positionAt(hand, step.time);
+    const event = eventAt(hand, step.time);
+    if (!position) return;
+    const sounding = event && event.time + event.duration > step.time ? event.notes.map((note) => note.midi) : [];
+    moment[hand] = { position, event, sounding, striking: event?.time === step.time };
+  });
+  return moment;
+}
+
+// Puts the hands on the stage for the current step. The play buttons and the
+// pointer can both press keys on top of what the score holds down. Returns the
+// milliseconds until struck keys land.
+function showHands({ jump = false, strike = true } = {}) {
+  const step = state.steps[state.stepIndex];
+  if (!step) return 0;
+  const moment = momentAt(step);
+  const hands = { left: null, right: null };
+  const underFinger = new Set();
+  for (const [hand, { position, sounding, striking }] of Object.entries(moment)) {
+    const assigned = new Set(position.fingers.map((entry) => noteToMidi(entry.note)));
+    assigned.forEach((midi) => underFinger.add(midi));
+    const held = state.replay ? [...state.replay] : sounding;
+    const active = [...new Set([...held, ...state.clicked])].filter((midi) => assigned.has(midi));
+    hands[hand] = { fingers: position.fingers, activeMidis: active, strike: strike && (state.replay ? active.length > 0 : striking) };
+  }
+  handsView.setSounding([...state.clicked, ...(state.replay ?? [])].filter((midi) => !underFinger.has(midi)));
+  return handsView.setHands(hands, { immediate: jump });
+}
+
+function renderHands({ jump = false, sound = false } = {}) {
   const step = state.steps[state.stepIndex];
   if (!step) return;
   const beat = Number.isInteger(step.beat) ? step.beat : step.beat.toFixed(2).replace(/0+$/, "");
   handsKicker.textContent = `Measure ${step.measure} · beat ${beat}`;
   const sources = new Set();
-  const hands = { left: null, right: null };
+  const moment = momentAt(step);
 
   ["right", "left"].forEach((hand) => {
-    const position = positionAt(hand, step.time);
-    const event = eventAt(hand, step.time);
-    if (!position) {
+    const entry = moment[hand];
+    if (!entry) {
       captions[hand].dataset.state = "silent";
       captions[hand].textContent = `${hand === "right" ? "Right" : "Left"} hand · not yet playing`;
       return;
     }
-    const sounding = event && event.time + event.duration > step.time ? event.notes.map((note) => note.midi) : [];
-    const striking = event?.time === step.time;
-    captions[hand].dataset.state = striking ? "playing" : "holding";
-    hands[hand] = { fingers: position.fingers, activeMidis: sounding, strike: striking };
-    captions[hand].textContent = `${hand === "right" ? "Right" : "Left"} hand · ${measureLabel(position)} · ${describeFingers(position.fingers)}`;
-    if (event) sources.add(event.fingeringSource);
+    captions[hand].dataset.state = entry.striking ? "playing" : "holding";
+    captions[hand].textContent = `${hand === "right" ? "Right" : "Left"} hand · ${measureLabel(entry.position)} · ${describeFingers(entry.position.fingers)}`;
+    if (entry.event) sources.add(entry.event.fingeringSource);
   });
-  handsView.setHands(hands, { immediate: jump });
+  player.stop();
+  const landing = showHands({ jump });
+  if (sound) {
+    // Notes still held from before keep ringing; everything else is damped.
+    const held = Object.values(moment).flatMap((entry) => (entry.striking ? [] : entry.sounding));
+    audio.releaseAll({ except: held });
+    for (const entry of Object.values(moment)) {
+      if (!entry.striking) continue;
+      // Stepping by hand is slower than the music, so let short notes ring long enough to hear.
+      const duration = Math.min(4000, Math.max(1200, (entry.event.duration * 60000) / TEMPO));
+      for (const midi of entry.sounding) audio.noteOn(midi, { delay: landing, duration });
+    }
+  }
+  const playable = Object.values(moment).some((entry) => entry.sounding.length);
+  Object.values(playButtons).forEach((button) => {
+    button.disabled = !playable;
+  });
 
   const labels = [...sources].map((source) => SOURCE_LABEL[source]);
   fingeringNote.textContent = labels.length ? labels.join(" · ") : "";
@@ -149,7 +208,7 @@ function moveCursorTo(time) {
 
 function goToStep(index, { jump = false } = {}) {
   state.stepIndex = Math.max(0, Math.min(state.steps.length - 1, index));
-  renderHands({ jump });
+  renderHands({ jump, sound: !jump });
   moveCursorTo(state.steps[state.stepIndex].time);
 }
 
@@ -399,6 +458,61 @@ async function readScoreFile(file) {
   }
 }
 
+// The play buttons replay the notes of the current moment, with the fingers
+// that hold them, either as written or one at a time from the bottom up.
+const player = new HandPlayer({
+  audio,
+  press: (midis) => {
+    state.replay = new Set(midis);
+    return showHands();
+  },
+  release: () => {
+    state.replay = null;
+    showHands({ strike: false });
+  },
+  onChange: (mode) => {
+    for (const [name, button] of Object.entries(playButtons)) button.classList.toggle("is-playing", name === mode);
+  },
+});
+
+function replay(mode) {
+  const step = state.steps[state.stepIndex];
+  if (!step) return;
+  if (player.mode === mode) {
+    player.stop();
+    return;
+  }
+  const notes = Object.values(momentAt(step)).flatMap((entry) => entry.sounding);
+  // Lift everything first so the fingers strike afresh.
+  state.replay = new Set();
+  showHands({ strike: false });
+  audio.releaseAll();
+  player.play(notes, mode);
+}
+
+playButtons.together.addEventListener("click", () => replay("together"));
+playButtons.succession.addEventListener("click", () => replay("succession"));
+
+soundToggle.checked = audio.enabled;
+soundToggle.addEventListener("change", () => {
+  audio.setEnabled(soundToggle.checked);
+  localStorage.setItem("musichands-sound", soundToggle.checked ? "on" : "off");
+});
+
+// Clicking a key plays it; if a finger sits on that key, the finger plays it.
+handsStage.addEventListener("noteon", (event) => {
+  const midi = Number(event.detail.midi);
+  state.clicked.add(midi);
+  audio.noteOn(midi);
+  showHands({ strike: false });
+});
+handsStage.addEventListener("noteoff", (event) => {
+  const midi = Number(event.detail.midi);
+  state.clicked.delete(midi);
+  audio.noteOff(midi);
+  showHands({ strike: false });
+});
+
 scoreSelect.addEventListener("change", () => loadScoreUrl(scoreSelect.value));
 scoreFile.addEventListener("change", () => {
   const [file] = scoreFile.files;
@@ -414,6 +528,7 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "ArrowLeft") goToStep(state.stepIndex - 1);
   else if (event.key === "Home") goToStep(0);
   else if (event.key === "End") goToStep(state.steps.length - 1);
+  else if (event.key === " ") replay(event.shiftKey ? "succession" : "together");
   else return;
   event.preventDefault();
 });

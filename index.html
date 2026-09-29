@@ -85,6 +85,10 @@
                 <span>Show note names</span>
               </label>
               <label class="check-field">
+                <input id="sound-toggle" type="checkbox" checked />
+                <span>Sound</span>
+              </label>
+              <label class="check-field">
                 <input id="show-guides" type="checkbox" checked />
                 <span>Show finger numbers</span>
               </label>
@@ -112,7 +116,9 @@
               <p>Click the keys, use <kbd>A</kbd>–<kbd>K</kbd>, or connect a MIDI keyboard.</p>
             </div>
             <div class="actions">
-              <button class="button button--primary" id="midi-button" type="button">Connect MIDI</button>
+              <button class="button button--primary" id="play-together" type="button" title="Play all five notes together">Together</button>
+              <button class="button button--primary" id="play-succession" type="button" title="Play one finger at a time">One by one</button>
+              <button class="button" id="midi-button" type="button">Connect MIDI</button>
               <button class="button" id="download-button" type="button">Download image</button>
             </div>
           </div>

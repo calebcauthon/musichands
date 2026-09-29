@@ -1020,3 +1020,60 @@ kbd {
   max-width: min(100%, calc(26vh * 2.42));
   justify-self: center;
 }
+
+/* Hearing a position: play buttons and the sound switch. */
+.play-controls {
+  display: grid;
+  justify-items: end;
+  gap: var(--space-xs);
+}
+
+.play-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.play-buttons .button {
+  min-height: 34px;
+  padding-block: 0;
+}
+
+.sound-toggle {
+  margin-left: var(--space-xs);
+}
+
+.button.is-playing {
+  border-color: var(--clay);
+  color: var(--paper);
+  background: var(--clay);
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+@media (max-width: 720px) {
+  .play-controls {
+    justify-items: start;
+  }
+}
+
+.play-strip,
+.actions {
+  flex-wrap: wrap;
+}
+
+.actions .button,
+.play-buttons .button {
+  white-space: nowrap;
+}
+
+.play-copy {
+  flex: 1 1 18rem;
+}
+
+.play-label {
+  white-space: nowrap;
+}

@@ -1,4 +1,6 @@
+import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
+import { PianoAudio } from "./piano-audio.js";
 import { describePosition, midiToNote, noteOptions, noteToMidi } from "./hand-model.js";
 
 const PRESETS = {
@@ -27,7 +29,8 @@ const PRESETS = {
 const state = {
   hand: "right",
   fingers: [],
-  activeMidis: new Set(),
+  activeMidis: new Set(), // keys held by the pointer, the computer keyboard or MIDI
+  replay: null, // notes the play buttons are holding, or null
   palmHeight: 44,
   curve: 52,
   weight: 30,
@@ -53,6 +56,12 @@ function fingerAssignments(notes) {
 state.fingers = fingerAssignments(PRESETS["c-position"].right);
 
 const visual = await createHandView(visualStage, { interactive: true, minWidth: 0.44 });
+const audio = new PianoAudio({ enabled: localStorage.getItem("musichands-sound") !== "off" });
+const soundToggle = document.querySelector("#sound-toggle");
+const playButtons = {
+  together: document.querySelector("#play-together"),
+  succession: document.querySelector("#play-succession"),
+};
 
 function renderFingerControls() {
   fingerControls.innerHTML = "";
@@ -66,6 +75,7 @@ function renderFingerControls() {
         ${options.map((note) => `<option value="${note}" ${note === finger.note ? "selected" : ""}>${note}</option>`).join("")}
       </select>`;
     label.querySelector("select").addEventListener("change", (event) => {
+      player.stop();
       finger.note = event.target.value;
       updateVisual();
     });
@@ -73,12 +83,39 @@ function renderFingerControls() {
   });
 }
 
-// Notes under a finger press that finger down; any other note just sounds its key.
-function showHand({ immediate = false } = {}) {
+// Notes under a finger press that finger down; any other note just sounds its
+// key. Returns the milliseconds until struck keys land.
+function showHand({ immediate = false, strike = false } = {}) {
   const assigned = new Set(state.fingers.map((finger) => noteToMidi(finger.note)));
-  const hand = { fingers: state.fingers, activeMidis: [...state.activeMidis].filter((midi) => assigned.has(midi)), strike: false };
-  visual.setHands({ [state.hand]: hand }, { immediate });
-  visual.setSounding(state.activeMidis);
+  const down = [...new Set([...state.activeMidis, ...(state.replay ?? [])])];
+  const hand = { fingers: state.fingers, activeMidis: down.filter((midi) => assigned.has(midi)), strike };
+  visual.setSounding(down);
+  return visual.setHands({ [state.hand]: hand }, { immediate });
+}
+
+const player = new HandPlayer({
+  audio,
+  press: (midis) => {
+    state.replay = new Set(midis);
+    return showHand({ strike: true });
+  },
+  release: () => {
+    state.replay = null;
+    showHand();
+  },
+  onChange: (mode) => {
+    for (const [name, button] of Object.entries(playButtons)) button.classList.toggle("is-playing", name === mode);
+    if (mode) setStatus(mode === "together" ? "Playing all five together" : "Playing one finger at a time", "correct");
+    else if (state.activeMidis.size === 0) setStatus("Ready to play");
+  },
+});
+
+function replay(mode) {
+  if (player.mode === mode) {
+    player.stop();
+    return;
+  }
+  player.play(state.fingers.map((finger) => noteToMidi(finger.note)), mode);
 }
 
 function updateVisual(options) {
@@ -89,6 +126,7 @@ function updateVisual(options) {
 }
 
 function applyPreset(name) {
+  player.stop();
   state.fingers = fingerAssignments(PRESETS[name][state.hand]);
   state.activeMidis.clear();
   renderFingerControls();
@@ -100,8 +138,9 @@ function setStatus(message, stateName = "idle") {
   liveStatus.dataset.state = stateName;
 }
 
-function noteOn(midi, source = "input") {
+function noteOn(midi, source = "input", velocity = 0.75) {
   state.activeMidis.add(Number(midi));
+  audio.noteOn(Number(midi), { velocity });
   showHand();
   const finger = state.fingers.find((entry) => noteToMidi(entry.note) === Number(midi));
   setStatus(
@@ -113,6 +152,7 @@ function noteOn(midi, source = "input") {
 
 function noteOff(midi) {
   state.activeMidis.delete(Number(midi));
+  audio.noteOff(Number(midi));
   showHand();
   if (state.activeMidis.size === 0) setStatus("Ready to play");
 }
@@ -193,7 +233,7 @@ async function connectMidi() {
       input.onmidimessage = ({ data }) => {
         const [command, note, velocity] = data;
         const type = command & 0xf0;
-        if (type === 0x90 && velocity > 0) noteOn(note, "MIDI");
+        if (type === 0x90 && velocity > 0) noteOn(note, "MIDI", velocity / 127);
         if (type === 0x80 || (type === 0x90 && velocity === 0)) noteOff(note);
       };
     });
@@ -206,6 +246,14 @@ async function connectMidi() {
 }
 
 midiButton.addEventListener("click", connectMidi);
+playButtons.together.addEventListener("click", () => replay("together"));
+playButtons.succession.addEventListener("click", () => replay("succession"));
+
+soundToggle.checked = audio.enabled;
+soundToggle.addEventListener("change", () => {
+  audio.setEnabled(soundToggle.checked);
+  localStorage.setItem("musichands-sound", soundToggle.checked ? "on" : "off");
+});
 
 downloadButton.addEventListener("click", () => {
   const file = visual.download(`musichands-${state.hand}-position`);
@@ -220,4 +268,5 @@ downloadButton.addEventListener("click", () => {
 
 renderFingerControls();
 updateVisual({ immediate: true });
+
 

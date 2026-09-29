@@ -11,8 +11,9 @@ class StageView {
     this.thumbnails = thumbnails;
   }
 
+  // Returns the milliseconds until any struck keys land.
   setHands(hands, { immediate = false } = {}) {
-    for (const side of SIDES) this.stage.setHand(side, hands[side] ?? null, { immediate });
+    return this.stage.setHands(hands, { immediate });
   }
 
   setSounding(midis) {
@@ -73,6 +74,7 @@ class FlatView {
       board.element.hidden = !spec;
       if (spec) board.update({ ...this.options, hand: side, fingers: spec.fingers, activeMidis: spec.activeMidis ?? [] });
     }
+    return 0;
   }
 
   setSounding(midis) {
