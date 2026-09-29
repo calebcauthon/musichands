@@ -46,6 +46,23 @@ Step through the piece with the arrow keys or the Next button, click a measure i
 
 Scores live in `scores/`. The bundled `roundball-rock.musicxml` came from a MuseScore export and carries no fingerings, so nearly every position there is a guess until the sidecar file fills them in.
 
+## Importing scores
+
+"Import a score…" on the sheet page takes a PDF, MusicXML or MXL file; so does dropping one anywhere on the page. Imported scores are kept in the browser (IndexedDB) and listed under "Your scores". "Save MusicXML" writes the current one out as a file, which is also the way to correct a misread score in a notation program and bring it back.
+
+### PDFs
+
+Notation programs draw noteheads, rests, clefs and accidentals as characters of a music font, using the standard [SMuFL](https://www.smufl.org/) code points, and draw staves, stems and barlines as lines. A PDF exported from one therefore still says exactly which symbol is where, and the import reads that rather than looking at pixels.
+
+- `pdf-reader.js` uses [pdf.js](https://mozilla.github.io/pdf.js/) 4.10, loaded from a CDN the first time a PDF is imported, to list every glyph, line and filled shape on each page.
+- `pdf-score.js` finds the staves and barlines, reads each note's pitch from where it sits under the clef and key, works out durations from note shapes, beams, flags, dots and triplet marks, times each measure from the columns the notes are printed in, finds ties, and writes MusicXML. It also reads the title, composer and tempo.
+
+What it reads: piano music on one or two staves, from PDFs that use a SMuFL font, which includes scores downloaded from MuseScore.
+
+What it does not read: scanned pages (they hold only a picture), PDFs set in older music fonts with their own character codes, grace notes, repeats and voltas (played straight through), ottava lines, and fingerings printed in the score.
+
+A measure whose notes do not add up to the time signature is named in the status line, so a misreading shows instead of passing silently.
+
 ## Tests
 
 ```bash

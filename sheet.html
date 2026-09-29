@@ -24,8 +24,8 @@
           <h1 id="score-title">Loading the score…</h1>
         </div>
         <p class="lede">
-          The score is drawn from MusicXML. Step through it and watch both
-          hands move across the keyboard, each finger landing on its key.
+          Bring in a score as a PDF or MusicXML file, step through it, and watch
+          both hands move across the keyboard, each finger landing on its key.
         </p>
       </header>
 
@@ -33,15 +33,22 @@
         <label class="field field--inline">
           <span>Score</span>
           <select id="score-select">
-            <option value="./scores/roundball-rock.musicxml">Roundball Rock</option>
-            <option value="./scores/minor-descent.musicxml">Minor Descent</option>
-            <option value="./scores/minor-descent-alt.musicxml">Minor Descent (alt reading)</option>
+            <optgroup label="Your scores" id="imported-scores" hidden></optgroup>
+            <optgroup label="Included">
+              <option value="./scores/roundball-rock.musicxml">Roundball Rock</option>
+              <option value="./scores/minor-descent.musicxml">Minor Descent</option>
+              <option value="./scores/minor-descent-alt.musicxml">Minor Descent (alt reading)</option>
+            </optgroup>
           </select>
         </label>
-        <label class="button file-button">
-          Open MusicXML…
-          <input id="score-file" type="file" accept=".xml,.musicxml,.mxl" hidden />
+        <label class="button file-button" title="Bring in a PDF, MusicXML or MXL file. You can also drop one anywhere on the page.">
+          Import a score…
+          <input id="score-file" type="file" accept=".pdf,.xml,.musicxml,.mxl" hidden />
         </label>
+        <div class="library-actions" id="library-actions" hidden>
+          <button class="button" type="button" id="save-score" title="Save this score as a MusicXML file">Save MusicXML</button>
+          <button class="button" type="button" id="remove-score" title="Take this score out of your list">Remove</button>
+        </div>
         <div class="stepper" role="group" aria-label="Step through the score">
           <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>
           <button class="button" type="button" id="step-prev" title="Previous (←)">←</button>
@@ -108,6 +115,7 @@
         <span>Use ← and → to move through the piece, Space to hear the moment again. Click a key to play it, or a position card to jump there.</span>
         <span>Fingering: score marks first, then <code>scores/*.fingering.json</code>, then a guess.</span>
       </footer>
+      <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>
     </main>
     <script type="module" src="./sheet.js"></script>
   </body>

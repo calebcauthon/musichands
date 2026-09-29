@@ -114,7 +114,9 @@ function readPart(partNode) {
       }
     });
 
-    const measureLength = Math.max(maxPosition / divisions, (beats * 4) / beatType);
+    // A pickup measure is only as long as the notes in it.
+    const pickup = measureNode.attrs.implicit === "yes" && maxPosition > 0;
+    const measureLength = pickup ? maxPosition / divisions : Math.max(maxPosition / divisions, (beats * 4) / beatType);
     measure.length = measureLength;
     measures.push(measure);
     measureStart += measureLength;
@@ -127,6 +129,20 @@ function readPart(partNode) {
     measure.events.forEach((event) => event.notes.sort((a, b) => a.midi - b.midi));
   });
   return { measures, events };
+}
+
+// The first tempo the score states, in quarter notes a minute.
+function readTempo(score) {
+  for (const part of children(score, "part")) {
+    for (const measure of children(part, "measure")) {
+      for (const node of measure.children) {
+        const sound = node.name === "sound" ? node : node.name === "direction" ? child(node, "sound") : null;
+        const tempo = Number(sound?.attrs.tempo);
+        if (tempo > 0) return tempo;
+      }
+    }
+  }
+  return null;
 }
 
 export function parseScore(xmlText) {
@@ -143,6 +159,7 @@ export function parseScore(xmlText) {
 
   return {
     title: text(child(score, "work"), "work-title", "") || text(score, "movement-title", "Untitled"),
+    tempo: readTempo(score),
     parts,
     measures: primary?.measures ?? [],
     events: primary?.events ?? [],

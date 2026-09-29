@@ -1077,3 +1077,28 @@ kbd {
 .play-label {
   white-space: nowrap;
 }
+
+/* Importing scores. */
+.library-actions {
+  display: flex;
+  gap: var(--space-2xs);
+}
+
+.library-actions[hidden],
+.drop-hint[hidden] {
+  display: none;
+}
+
+.drop-hint {
+  position: fixed;
+  inset: var(--space-md);
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--clay);
+  background: oklch(96% 0.03 84 / 0.92);
+  color: var(--clay-deep);
+  font-family: var(--display);
+  font-size: clamp(1.6rem, 4vw, 3rem);
+  pointer-events: none;
+}
