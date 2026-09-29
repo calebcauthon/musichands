@@ -1255,3 +1255,41 @@ kbd {
   background: #e9a63a;
 }
 
+
+/* Choosing what to see and hear of each hand. */
+.hands-captions {
+  align-items: center;
+}
+
+.hand-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-md);
+}
+
+.hand-strip[data-hand="right"] {
+  justify-content: flex-end;
+}
+
+.hand-toggles {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.hand-toggles .check-field,
+.play-buttons .check-field {
+  gap: 0.3rem;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.hand-toggles .check-field input {
+  width: 15px;
+  height: 15px;
+}
+
+.hand-strip.is-hidden .hand-caption {
+  opacity: 0.5;
+  text-decoration: line-through;
+}

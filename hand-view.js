@@ -44,8 +44,12 @@ class StageView {
     this.stage.setAutoCut(!this.stage.autoCut);
   }
 
-  setSounding(midis) {
-    this.stage.setSounding(midis);
+  setSounding(midis, timing) {
+    this.stage.setSounding(midis, timing);
+  }
+
+  setNumbers(show) {
+    this.stage.setOptions({ showBadges: show });
   }
 
   setOptions({ showNotes = true, showGuides = true, palmHeight = 44, curve = 52, weight = 30 }) {
@@ -122,6 +126,10 @@ class FlatView {
   goToShot() {}
 
   toggleAutoCut() {}
+
+  setNumbers(show) {
+    this.setOptions({ ...this.options, showGuides: show });
+  }
 
   get reach() {
     return 0;

@@ -750,9 +750,16 @@ export class HandStage {
   }
 
   // Keys that sound without a hand on them (a click, or a note outside the position).
-  setSounding(midis) {
+  // `struck` are the ones that go down afresh, `delay` ms from now: a key
+  // already down comes up first, the way it would under a finger.
+  setSounding(midis, { struck = [], delay = 0 } = {}) {
     this.sounding = new Set([...midis].map(Number));
     this.refreshKeys(false);
+    const down = performance.now() + Math.max(0, delay - KEY_FALL / this.pace);
+    for (const midi of struck) {
+      const entry = this.keys.get(Number(midi));
+      if (entry && this.sounding.has(Number(midi))) entry.delay = down;
+    }
     this.invalidate();
   }
 

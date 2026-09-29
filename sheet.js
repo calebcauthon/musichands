@@ -1,5 +1,6 @@
 import { assignFingering } from "./fingering.js";
 import { noteToMidi } from "./hand-model.js";
+import { applyChoices, HANDS, readChoices } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
 import { PianoAudio } from "./piano-audio.js";
@@ -64,6 +65,7 @@ const state = {
   tempo: DEFAULT_TEMPO, // quarter notes a minute, as set on the slider
   cursorAt: null, // the score time the notation cursor was last moved to
   measureShown: null, // the measure the hands were last shown in
+  choices: readChoices(localStorage.getItem("musichands-hands")), // which hands to draw and to hear
 };
 
 function setStatus(message, stateName = "idle") {
@@ -142,9 +144,11 @@ function showHands({ jump = false, strike = true, landIn = null } = {}) {
   const step = state.steps[state.stepIndex];
   if (!step) return 0;
   const moment = momentAt(step);
+  const { shown, ghost } = applyChoices(moment, state.choices);
   const hands = { left: null, right: null };
   const underFinger = new Set();
-  for (const [hand, { position, sounding, struck, striking }] of Object.entries(moment)) {
+  for (const hand of shown) {
+    const { position, sounding, struck, striking } = moment[hand];
     const assigned = new Set(position.fingers.map((entry) => noteToMidi(entry.note)));
     assigned.forEach((midi) => underFinger.add(midi));
     const held = state.replay ? [...state.replay] : sounding;
@@ -157,8 +161,12 @@ function showHands({ jump = false, strike = true, landIn = null } = {}) {
       strikeMidis: state.replay ? null : struck.map((note) => note.midi),
     };
   }
-  handsView.setSounding([...state.clicked, ...(state.replay ?? [])].filter((midi) => !underFinger.has(midi)));
-  return handsView.setHands(hands, { immediate: jump, landIn });
+  const landing = handsView.setHands(hands, { immediate: jump, landIn });
+  // Keys with no hand on them: clicked ones, and those of a hand that is hidden.
+  const loose = [...state.clicked, ...(state.replay ?? [...ghost.held, ...ghost.struck])].filter((midi) => !underFinger.has(midi));
+  const struckLoose = strike && !jump ? (state.replay ? [...state.replay] : ghost.struck).filter((midi) => !underFinger.has(midi)) : [];
+  handsView.setSounding(loose, { struck: struckLoose, delay: landIn ?? landing });
+  return landing;
 }
 
 // landIn is set while the score is playing: the notes must land that many
@@ -194,14 +202,12 @@ function renderHands({ jump = false, sound = false, landIn = null } = {}) {
     const struck = new Set(Object.values(moment).flatMap((entry) => entry.struck.map((note) => note.midi)));
     const held = Object.values(moment).flatMap((entry) => entry.sounding.filter((midi) => !struck.has(midi)));
     if (!playing) audio.releaseAll({ except: held });
-    for (const entry of Object.values(moment)) {
-      for (const note of entry.struck) {
-        // A note rings through everything it is tied into.
-        const written = (note.sustain * 60000) / state.tempo;
-        // Stepping by hand is slower than the music, so let short notes ring long enough to hear.
-        const duration = playing ? Math.max(140, written) : Math.min(6000, Math.max(1200, written));
-        audio.noteOn(note.midi, { delay: playing ? landIn : landing, duration });
-      }
+    for (const note of applyChoices(moment, state.choices).heard) {
+      // A note rings through everything it is tied into.
+      const written = (note.sustain * 60000) / state.tempo;
+      // Stepping by hand is slower than the music, so let short notes ring long enough to hear.
+      const duration = playing ? Math.max(140, written) : Math.min(6000, Math.max(1200, written));
+      audio.noteOn(note.midi, { delay: playing ? landIn : landing, duration });
     }
   }
   const playable = Object.values(moment).some((entry) => entry.sounding.length);
@@ -598,7 +604,9 @@ function replay(mode) {
     player.stop();
     return;
   }
-  const notes = Object.values(momentAt(step)).flatMap((entry) => entry.sounding);
+  // Only the hands that are switched on for sound are replayed.
+  const moment = momentAt(step);
+  const notes = HANDS.filter((hand) => moment[hand] && state.choices[hand].sound).flatMap((hand) => moment[hand].sounding);
   // Lift everything first so the fingers strike afresh.
   state.replay = new Set();
   showHands({ strike: false });
@@ -667,6 +675,39 @@ playScore.addEventListener("click", togglePlaying);
 tempoSlider.addEventListener("input", () => setTempo(Number(tempoSlider.value)));
 reflexSlider.addEventListener("input", () => setReflexes(Number(reflexSlider.value)));
 setReflexes(Number(localStorage.getItem("musichands-reflexes")) || 1);
+
+// Which hands to draw and to hear, and whether to number the fingers.
+for (const hand of HANDS) {
+  for (const what of ["show", "sound"]) {
+    const box = document.querySelector(`#${hand}-${what}`);
+    box.checked = state.choices[hand][what];
+    box.addEventListener("change", () => {
+      state.choices[hand][what] = box.checked;
+      localStorage.setItem("musichands-hands", JSON.stringify(state.choices));
+      if (what === "sound" && !box.checked) audio.releaseAll();
+      showChoices();
+      showHands({ strike: false });
+    });
+  }
+}
+
+function showChoices() {
+  for (const hand of HANDS) {
+    const strip = document.querySelector(`.hand-strip[data-hand="${hand}"]`);
+    strip.classList.toggle("is-hidden", !state.choices[hand].show);
+    strip.classList.toggle("is-silent", !state.choices[hand].sound);
+  }
+}
+
+const numbersToggle = document.querySelector("#numbers-toggle");
+function setNumbers(show) {
+  numbersToggle.checked = show;
+  handsView.setNumbers(show);
+  localStorage.setItem("musichands-numbers", show ? "on" : "off");
+}
+numbersToggle.addEventListener("change", () => setNumbers(numbersToggle.checked));
+setNumbers(localStorage.getItem("musichands-numbers") !== "off");
+showChoices();
 
 soundToggle.checked = audio.enabled;
 soundToggle.addEventListener("change", () => {
@@ -744,9 +785,12 @@ document.querySelector("#step-prev").addEventListener("click", () => goToStep(st
 document.querySelector("#step-next").addEventListener("click", () => goToStep(state.stepIndex + 1));
 
 window.addEventListener("keydown", (event) => {
-  // Leave typing and sliders alone, and let Space and Enter press a focused button.
-  if (event.target.matches("input, select, textarea")) return;
-  if (event.target.matches("button, summary, a") && (event.key === " " || event.key === "Enter")) return;
+  // Leave typing, lists and sliders alone, and let Space and Enter work a
+  // focused button or tick box. Anything else is a shortcut, wherever focus is.
+  const target = event.target;
+  const ticks = target.matches("input") && ["checkbox", "radio"].includes(target.type);
+  if (target.matches("select, textarea") || (target.matches("input") && !ticks)) return;
+  if (target.matches("button, summary, a, input") && (event.key === " " || event.key === "Enter")) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (event.key === "ArrowRight") goToStep(state.stepIndex + 1);
   else if (event.key === "ArrowLeft") goToStep(state.stepIndex - 1);
@@ -755,6 +799,7 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === " ") replay(event.shiftKey ? "succession" : "together");
   else if (event.key === "p" || event.key === "P") togglePlaying();
   else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
+  else if (event.key === "n" || event.key === "N") setNumbers(!numbersToggle.checked);
   else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
   else return;
   event.preventDefault();
