@@ -55,7 +55,7 @@ function fingerAssignments(notes) {
 
 state.fingers = fingerAssignments(PRESETS["c-position"].right);
 
-const visual = await createHandView(visualStage, { interactive: true, minWidth: 0.44 });
+const visual = await createHandView(visualStage, { interactive: true, minWidth: 0.44, viewKey: "studio" });
 const audio = new PianoAudio({ enabled: localStorage.getItem("musichands-sound") !== "off" });
 const soundToggle = document.querySelector("#sound-toggle");
 const playButtons = {

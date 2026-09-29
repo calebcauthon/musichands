@@ -14,6 +14,8 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { clone as cloneRigged } from "three/addons/utils/SkeletonUtils.js";
+import { cleanView, DRAG_THRESHOLD, dragOrbit, framingDistance, orbitPosition, readView, sameView, ZOOM_STEP, zoomView } from "./camera-orbit.js";
+import { dueForCut, readShots, ShotList } from "./camera-shots.js";
 import { FINGER_JOINTS, readSkeleton } from "./glb-skeleton.js";
 import { noteToMidi } from "./hand-model.js";
 import { blendPose, createRig, poseMatrices, solvePose } from "./hand-rig.js";
@@ -38,6 +40,10 @@ const COLORS = {
 const KEY_LAG = 30; // ms between a finger starting down and its key following
 const KEY_FALL = 25; // ms for a key to reach the bottom, where a piano sounds
 const PRESS = 95; // ms for a lifted finger to come down
+const FARTHEST = 1.7; // how many times its starting distance the camera may back away when turned
+const DRIFT = { turn: 1.1, push: 0.012 }; // degrees and share of zoom gained each second within a shot
+const SHOTS_KEY = "musichands-shots";
+const AUTO_CUT_KEY = "musichands-auto-cut";
 const CAMERA = { fov: 27, elevation: 72, target: [0.018, -0.002], depth: 0.275, minWidth: 0.5, margin: 0.13 };
 
 // The last pass: darkened corners and a little grain, as from a lens and film.
@@ -321,6 +327,7 @@ function createSleeve() {
         ring(0.043, 0.036, 0.1, -0.003),
         ring(0.05, 0.043, 0.22, -0.006),
         ring(0.058, 0.05, 0.42, -0.01),
+        ring(0.064, 0.056, 0.85, -0.03),
       ],
       sleeveMaterial,
     ),
@@ -417,6 +424,16 @@ export class HandStage {
     this.sounding = new Set();
     this.focus = { x: 0, width: CAMERA.minWidth };
     this.view = { x: 0, width: CAMERA.minWidth };
+    // The angle the camera starts from, the angle it is at, and the one it is turning toward.
+    this.home = { azimuth: 0, elevation: this.options.elevation ?? CAMERA.elevation, zoom: 1 };
+    this.shots = new ShotList(readShots(window.localStorage?.getItem(SHOTS_KEY)) ?? undefined);
+    this.autoCut = Boolean(this.options.autoCut) && window.localStorage?.getItem(AUTO_CUT_KEY) === "on";
+    this.rolling = false; // true while music is playing
+    this.lastCut = 0;
+    this.drift = { azimuth: 0, zoom: 1, turn: 1 }; // slow movement within a shot
+    const stored = this.options.viewKey ? readView(window.localStorage?.getItem(`musichands-view-${this.options.viewKey}`)) : null;
+    this.orbit = { ...(stored ?? this.home) };
+    this.orbitGoal = { ...this.orbit };
     this.running = false;
     this.needsRender = true;
     this.lastTime = 0;
@@ -451,7 +468,7 @@ export class HandStage {
     this.resize();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(element);
-    if (this.options.interactive) this.bindPointer();
+    if (!this.options.snapshot) this.bindPointer();
 
     this.ready = loadHandAsset().then((asset) => {
       const material = createSkinMaterial(asset.rig);
@@ -909,15 +926,18 @@ export class HandStage {
   }
 
   aimCamera() {
-    const vertical = (this.camera.fov * Math.PI) / 180;
-    const horizontal = 2 * Math.atan(Math.tan(vertical / 2) * this.camera.aspect);
-    // Wide stages frame by width; tall ones must still hold the hand and keys.
-    const byWidth = this.view.width / (2 * Math.tan(horizontal / 2));
-    const byHeight = (this.options.depth ?? CAMERA.depth) / (2 * Math.tan(vertical / 2));
-    const distance = Math.max(byWidth, byHeight);
-    const elevation = ((this.options.elevation ?? CAMERA.elevation) * Math.PI) / 180;
+    // The patch of keyboard to keep in view: as wide as the hands need, and
+    // deep enough for the keys and wrists as seen from the starting angle.
+    const depth = (this.options.depth ?? CAMERA.depth) / Math.sin((this.home.elevation * Math.PI) / 180);
+    const lens = { vertical: this.camera.fov, aspect: this.camera.aspect };
+    const patch = { width: this.view.width, depth };
+    // Back away to keep the hands in frame as the camera turns, but not so far
+    // that they become specks on a wide stage.
+    const shot = cleanView({ azimuth: this.orbit.azimuth + this.drift.azimuth, elevation: this.orbit.elevation, zoom: this.orbit.zoom * this.drift.zoom });
+    const framed = Math.min(framingDistance(patch, shot, lens), framingDistance(patch, this.home, lens) * FARTHEST);
+    const distance = Math.max(0.16, framed / shot.zoom);
     const target = new THREE.Vector3(this.view.x, CAMERA.target[0], this.options.targetZ ?? CAMERA.target[1]);
-    this.camera.position.set(this.view.x, target.y + Math.sin(elevation) * distance, target.z + Math.cos(elevation) * distance);
+    this.camera.position.fromArray(orbitPosition(target.toArray(), distance, shot));
     this.camera.lookAt(target);
     // Focus on the knuckles, a little above the keys.
     if (this.lens) this.lens.uniforms.focus.value = this.camera.position.distanceTo(new THREE.Vector3(this.view.x, 0.045, 0.0));
@@ -928,12 +948,48 @@ export class HandStage {
   stepCamera(delta) {
     const dx = this.focus.x - this.view.x;
     const dw = this.focus.width - this.view.width;
-    if (Math.abs(dx) < 0.0002 && Math.abs(dw) < 0.0002) return false;
+    const da = this.orbitGoal.azimuth - this.orbit.azimuth;
+    const de = this.orbitGoal.elevation - this.orbit.elevation;
+    const dz = this.orbitGoal.zoom - this.orbit.zoom;
+    const framed = Math.abs(dx) < 0.0002 && Math.abs(dw) < 0.0002;
+    const turned = Math.abs(da) < 0.02 && Math.abs(de) < 0.02 && Math.abs(dz) < 0.002;
+    const drifting = this.rolling && this.autoCut && !this.stillOnly;
+    if (framed && turned && !drifting) return false;
     const rate = 1 - Math.exp(-delta * 0.0045);
     this.view.x += dx * rate;
     this.view.width += dw * rate;
+    // Turning follows the pointer closely; framing glides.
+    const turn = turned ? 1 : 1 - Math.exp(-delta * 0.02);
+    this.orbit.azimuth += da * turn;
+    this.orbit.elevation += de * turn;
+    this.orbit.zoom += dz * turn;
+    if (drifting) {
+      // Within a shot the camera creeps round and in, so no picture is ever still.
+      this.drift.azimuth += this.drift.turn * DRIFT.turn * (delta / 1000);
+      this.drift.zoom *= 1 + DRIFT.push * (delta / 1000);
+    }
     this.aimCamera();
     return true;
+  }
+
+  // Move the camera to a view, or back to where it started. A view the
+  // camera cut to on its own is not the one to come back to next visit.
+  setView(view = this.home, { immediate = false, remember = true } = {}) {
+    this.orbitGoal = { ...this.home, ...view };
+    this.drift = { azimuth: 0, zoom: 1, turn: -this.drift.turn };
+    if (immediate || this.stillOnly) {
+      this.orbit = { ...this.orbitGoal };
+      this.aimCamera();
+    }
+    this.showCameraState();
+    if (remember && this.options.viewKey) {
+      try {
+        window.localStorage?.setItem(`musichands-view-${this.options.viewKey}`, JSON.stringify(this.orbitGoal));
+      } catch {
+        // The view is simply not remembered.
+      }
+    }
+    this.invalidate();
   }
 
   // Where each finger number belongs, in stage pixels: on the key just past the fingertip.
@@ -1034,35 +1090,207 @@ export class HandStage {
     }
   }
 
+  // Dragging turns the camera. A press that stays put is a click, which
+  // plays the key under it when the stage is interactive.
   bindPointer() {
     const raycaster = new THREE.Raycaster();
-    const pointers = new Map();
+    const gestures = new Map();
     const midiAt = (event) => {
+      if (!this.options.interactive) return null;
       const rect = this.canvas.getBoundingClientRect();
       const point = new THREE.Vector2(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
       raycaster.setFromCamera(point, this.camera);
       const [hit] = raycaster.intersectObjects(this.keyMeshes, false);
       return hit ? hit.object.userData.midi : null;
     };
-    const release = (event) => {
-      const midi = pointers.get(event.pointerId);
-      if (midi === undefined) return;
-      pointers.delete(event.pointerId);
-      this.element.dispatchEvent(new CustomEvent("noteoff", { detail: { midi, source: "pointer" } }));
+    const send = (type, midi) => this.element.dispatchEvent(new CustomEvent(type, { detail: { midi, source: "pointer" } }));
+    const finish = (event) => {
+      const gesture = gestures.get(event.pointerId);
+      if (!gesture) return;
+      gestures.delete(event.pointerId);
+      if (gesture.midi !== null) send("noteoff", gesture.midi);
+      if (gesture.turning) this.canvas.classList.remove("is-turning");
+      if (this.canvas.hasPointerCapture?.(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
     };
+
+    this.canvas.title = "Drag to turn the view";
     this.canvas.addEventListener("pointerdown", (event) => {
-      const midi = midiAt(event);
-      if (midi === null) return;
+      // Shift or the right button turns the view from anywhere, without playing a key.
+      const turnOnly = event.shiftKey || event.button === 2;
+      if (event.button !== 0 && !turnOnly) return;
+      const midi = turnOnly ? null : midiAt(event);
       event.preventDefault();
-      pointers.set(event.pointerId, midi);
-      this.element.dispatchEvent(new CustomEvent("noteon", { detail: { midi, source: "pointer" } }));
+      gestures.set(event.pointerId, { x: event.clientX, y: event.clientY, midi, turning: false, from: { ...this.orbitGoal } });
+      this.canvas.setPointerCapture?.(event.pointerId);
+      if (midi !== null) send("noteon", midi);
     });
     this.canvas.addEventListener("pointermove", (event) => {
-      this.canvas.style.cursor = midiAt(event) === null ? "" : "pointer";
+      const gesture = gestures.get(event.pointerId);
+      if (!gesture) {
+        this.canvas.style.cursor = midiAt(event) === null ? "grab" : "pointer";
+        return;
+      }
+      const [dx, dy] = [event.clientX - gesture.x, event.clientY - gesture.y];
+      if (!gesture.turning) {
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+        gesture.turning = true;
+        this.canvas.classList.add("is-turning");
+        // The press turned out to be a drag, so let go of the key it landed on.
+        if (gesture.midi !== null) send("noteoff", gesture.midi);
+        gesture.midi = null;
+      }
+      this.setView(dragOrbit(gesture.from, dx, dy));
     });
-    this.canvas.addEventListener("pointerup", release);
-    this.canvas.addEventListener("pointerleave", release);
-    this.canvas.addEventListener("pointercancel", release);
+    this.canvas.addEventListener("pointerup", finish);
+    this.canvas.addEventListener("pointercancel", finish);
+    this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    this.canvas.addEventListener("dblclick", (event) => {
+      if (midiAt(event) === null) this.setView();
+    });
+
+    this.buildCameraBar();
+  }
+
+  // The controls along the bottom of the stage: closer and farther, the saved
+  // views, and cutting between them.
+  buildCameraBar() {
+    const button = (className, label, title, onClick) => {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = className;
+      node.textContent = label;
+      node.title = title;
+      node.addEventListener("click", onClick);
+      return node;
+    };
+    const group = (className, ...children) => {
+      const node = document.createElement("div");
+      node.className = className;
+      node.append(...children);
+      return node;
+    };
+    this.cameraBar = group("hand-stage__camera");
+    this.cameraBar.setAttribute("role", "group");
+    this.cameraBar.setAttribute("aria-label", "Camera");
+    this.shotRail = group("camera-shots");
+    this.saveButton = button("camera-button camera-save", "Save view", "Keep this camera position", () => this.saveShot());
+    this.autoButton = button("camera-button camera-auto", "Auto cut", "Cut between your saved views as the music plays", () => this.setAutoCut(!this.autoCut));
+    this.autoButton.hidden = !this.options.autoCut;
+    this.resetButton = button("camera-button hand-stage__reset", "Reset view", "Put the camera back where it started", () => this.setView());
+    this.cameraBar.append(
+      group(
+        "camera-zoom",
+        button("camera-button", "−", "Move the camera back", () => this.zoomBy(1 / ZOOM_STEP)),
+        button("camera-button", "+", "Move the camera closer", () => this.zoomBy(ZOOM_STEP)),
+      ),
+      this.shotRail,
+      this.saveButton,
+      group("camera-right", this.autoButton, this.resetButton),
+    );
+    this.element.append(this.cameraBar);
+    this.showShots();
+    this.showCameraState();
+  }
+
+  showCameraState() {
+    if (!this.cameraBar) return;
+    this.resetButton.hidden = sameView(this.orbitGoal, this.home);
+    this.autoButton.setAttribute("aria-pressed", String(this.autoCut));
+    this.autoButton.classList.toggle("is-on", this.autoCut);
+    this.saveButton.disabled = this.shots.full;
+    [...this.shotRail.children].forEach((chip, index) => {
+      chip.classList.toggle("is-current", sameView(this.shots.views[index], this.orbitGoal));
+    });
+  }
+
+  showShots() {
+    this.shotRail.replaceChildren(
+      ...this.shots.views.map((view, index) => {
+        const chip = document.createElement("span");
+        chip.className = "camera-shot";
+        const go = document.createElement("button");
+        go.type = "button";
+        go.className = "camera-shot__go";
+        go.textContent = index + 1;
+        go.title = `Go to saved view ${index + 1}`;
+        go.addEventListener("click", () => this.goToShot(index));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "camera-shot__remove";
+        remove.textContent = "×";
+        remove.title = `Remove saved view ${index + 1}`;
+        remove.setAttribute("aria-label", remove.title);
+        remove.addEventListener("click", () => this.removeShot(index));
+        chip.append(go, remove);
+        return chip;
+      }),
+    );
+    try {
+      window.localStorage?.setItem(SHOTS_KEY, JSON.stringify(this.shots.views));
+    } catch {
+      // The views last only for this visit.
+    }
+  }
+
+  zoomBy(factor) {
+    this.setView(zoomView(this.orbitGoal, factor));
+  }
+
+  saveShot() {
+    const index = this.shots.add(cleanView(this.orbitGoal));
+    if (index === -1) return;
+    this.showShots();
+    this.showCameraState();
+  }
+
+  removeShot(index) {
+    this.shots.remove(index);
+    this.showShots();
+    this.showCameraState();
+  }
+
+  goToShot(index, { cut = false } = {}) {
+    const view = this.shots.views[index];
+    if (!view) return;
+    this.shots.at = index;
+    this.lastCut = performance.now();
+    this.setView(view, { immediate: cut });
+  }
+
+  setAutoCut(on) {
+    this.autoCut = Boolean(on);
+    this.drift = { azimuth: 0, zoom: 1, turn: this.drift.turn };
+    try {
+      window.localStorage?.setItem(AUTO_CUT_KEY, this.autoCut ? "on" : "off");
+    } catch {
+      // Not remembered.
+    }
+    this.showCameraState();
+    this.aimCamera();
+    this.invalidate();
+  }
+
+  // Tell the stage whether music is playing, so the camera knows when to move on its own.
+  setRolling(rolling) {
+    this.rolling = Boolean(rolling);
+    if (!this.rolling && (this.drift.azimuth !== 0 || this.drift.zoom !== 1)) {
+      // Settle on the shot as it was saved.
+      this.drift = { azimuth: 0, zoom: 1, turn: this.drift.turn };
+      this.aimCamera();
+    }
+    this.invalidate();
+  }
+
+  // Called as the music reaches a new step. Cuts to the next saved view when
+  // auto cut is on, a measure is starting, and the shot has had its time.
+  beat({ measureStarted = false } = {}) {
+    if (!this.autoCut) return false;
+    const now = performance.now();
+    if (!dueForCut({ now, lastCut: this.lastCut, shots: this.shots.length, measureStarted })) return false;
+    const view = this.shots.next(this.orbitGoal);
+    this.lastCut = now;
+    this.setView(view, { immediate: true, remember: false });
+    return true;
   }
 
   dispose() {
@@ -1070,6 +1298,7 @@ export class HandStage {
     this.renderer.dispose();
     this.canvas.remove();
     this.overlay.remove();
+    this.cameraBar?.remove();
   }
 }
 

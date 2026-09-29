@@ -18,7 +18,7 @@ const handsKicker = document.querySelector("#hands-kicker");
 const handsTitle = document.querySelector("#hands-title");
 const fingeringNote = document.querySelector("#fingering-note");
 const handsStage = document.querySelector("#hands-stage");
-const handsView = await createHandView(handsStage, { interactive: true });
+const handsView = await createHandView(handsStage, { interactive: true, viewKey: "sheet", autoCut: true });
 const audio = new PianoAudio({ enabled: localStorage.getItem("musichands-sound") !== "off" });
 const soundToggle = document.querySelector("#sound-toggle");
 const playButtons = {
@@ -63,6 +63,7 @@ const state = {
   replay: null, // notes the play buttons are holding, or null
   tempo: DEFAULT_TEMPO, // quarter notes a minute, as set on the slider
   cursorAt: null, // the score time the notation cursor was last moved to
+  measureShown: null, // the measure the hands were last shown in
 };
 
 function setStatus(message, stateName = "idle") {
@@ -173,6 +174,9 @@ function renderHands({ jump = false, sound = false, landIn = null } = {}) {
     if (entry.event) sources.add(entry.event.fingeringSource);
   });
   player.stop();
+  // The camera may cut as a new measure begins.
+  if (!jump) handsView.beat({ measureStarted: step.measure !== state.measureShown });
+  state.measureShown = step.measure;
   const landing = showHands({ jump, landIn });
   const playing = landIn !== null;
   if (sound) {
@@ -609,6 +613,7 @@ const transport = new ScoreTransport({
 function showPlaying(playing) {
   playScore.textContent = playing ? "■ Stop" : "▶ Play";
   playScore.classList.toggle("is-playing", playing);
+  handsView.setRolling(playing);
 }
 
 function stopPlaying() {
@@ -737,6 +742,8 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "End") goToStep(state.steps.length - 1);
   else if (event.key === " ") replay(event.shiftKey ? "succession" : "together");
   else if (event.key === "p" || event.key === "P") togglePlaying();
+  else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
+  else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
   else return;
   event.preventDefault();
 });

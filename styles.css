@@ -1138,3 +1138,120 @@ kbd {
   text-align: right;
   text-transform: none;
 }
+
+/* Turning the camera. */
+.hand-stage__canvas {
+  cursor: grab;
+}
+
+.hand-stage__canvas.is-turning {
+  cursor: grabbing !important;
+}
+
+/* The camera bar along the bottom of the stage. */
+.hand-stage__camera {
+  position: absolute;
+  right: var(--space-sm);
+  bottom: var(--space-sm);
+  left: var(--space-sm);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs);
+  pointer-events: none;
+  opacity: 0.82;
+  transition: opacity 200ms ease;
+}
+
+.hand-stage:hover .hand-stage__camera,
+.hand-stage__camera:focus-within {
+  opacity: 1;
+}
+
+.hand-stage__camera > *,
+.camera-right > * {
+  pointer-events: auto;
+}
+
+.camera-zoom,
+.camera-shots,
+.camera-right {
+  display: flex;
+  gap: 2px;
+}
+
+.camera-right {
+  gap: var(--space-xs);
+  margin-left: auto;
+  pointer-events: none;
+}
+
+.camera-button,
+.camera-shot__go,
+.camera-shot__remove {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.72);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.camera-button:hover,
+.camera-shot__go:hover,
+.camera-shot__remove:hover {
+  background: oklch(30% 0.03 50 / 0.9);
+}
+
+.camera-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.camera-button[hidden] {
+  display: none;
+}
+
+.camera-shot {
+  display: flex;
+}
+
+.camera-shot__go {
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.camera-shot.is-current .camera-shot__go {
+  border-color: var(--gold, #e9a63a);
+  color: oklch(18% 0.02 50);
+  background: #e9a63a;
+}
+
+.camera-shot__remove {
+  min-width: 0;
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+  border-width: 1px 0;
+  opacity: 0;
+  transition: width 140ms ease, opacity 140ms ease;
+}
+
+.camera-shot:hover .camera-shot__remove,
+.camera-shot:focus-within .camera-shot__remove {
+  width: 22px;
+  border-width: 1px 1px 1px 0;
+  opacity: 1;
+}
+
+.camera-auto.is-on {
+  border-color: #e9a63a;
+  color: oklch(18% 0.02 50);
+  background: #e9a63a;
+}
+

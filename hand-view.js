@@ -26,6 +26,24 @@ class StageView {
     return this.stage.reach;
   }
 
+  // Whether music is playing, and each step it reaches: the camera uses both
+  // to cut between saved views.
+  setRolling(rolling) {
+    this.stage.setRolling(rolling);
+  }
+
+  beat(moment) {
+    return this.stage.beat(moment);
+  }
+
+  goToShot(index) {
+    this.stage.goToShot(index);
+  }
+
+  toggleAutoCut() {
+    this.stage.setAutoCut(!this.stage.autoCut);
+  }
+
   setSounding(midis) {
     this.stage.setSounding(midis);
   }
@@ -92,8 +110,18 @@ class FlatView {
     this.single?.setActiveMidis(this.sounding);
   }
 
-  // The flat drawing does not move, so there is nothing to speed up.
+  // The flat drawing does not move, so there is nothing to speed up or film.
   setSpeed() {}
+
+  setRolling() {}
+
+  beat() {
+    return false;
+  }
+
+  goToShot() {}
+
+  toggleAutoCut() {}
 
   get reach() {
     return 0;
