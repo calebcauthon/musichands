@@ -1,4 +1,4 @@
-import { HandKeyboard } from "./hand-keyboard.js";
+import { createHandView } from "./hand-view.js";
 import { describePosition, midiToNote, noteOptions, noteToMidi } from "./hand-model.js";
 
 const PRESETS = {
@@ -52,7 +52,7 @@ function fingerAssignments(notes) {
 
 state.fingers = fingerAssignments(PRESETS["c-position"].right);
 
-const visual = new HandKeyboard(visualStage, state);
+const visual = await createHandView(visualStage, { interactive: true, minWidth: 0.44 });
 
 function renderFingerControls() {
   fingerControls.innerHTML = "";
@@ -73,8 +73,17 @@ function renderFingerControls() {
   });
 }
 
-function updateVisual() {
-  visual.update({ ...state, activeMidis: [...state.activeMidis] });
+// Notes under a finger press that finger down; any other note just sounds its key.
+function showHand({ immediate = false } = {}) {
+  const assigned = new Set(state.fingers.map((finger) => noteToMidi(finger.note)));
+  const hand = { fingers: state.fingers, activeMidis: [...state.activeMidis].filter((midi) => assigned.has(midi)), strike: false };
+  visual.setHands({ [state.hand]: hand }, { immediate });
+  visual.setSounding(state.activeMidis);
+}
+
+function updateVisual(options) {
+  visual.setOptions(state);
+  showHand(options);
   positionKicker.textContent = `${state.hand === "right" ? "Right" : "Left"} hand position`;
   positionTitle.textContent = describePosition(state.hand, state.fingers);
 }
@@ -93,7 +102,7 @@ function setStatus(message, stateName = "idle") {
 
 function noteOn(midi, source = "input") {
   state.activeMidis.add(Number(midi));
-  visual.setActiveMidis(state.activeMidis);
+  showHand();
   const finger = state.fingers.find((entry) => noteToMidi(entry.note) === Number(midi));
   setStatus(
     finger ? `${midiToNote(midi)} · finger ${finger.finger}` : `${midiToNote(midi)} · outside this position`,
@@ -104,7 +113,7 @@ function noteOn(midi, source = "input") {
 
 function noteOff(midi) {
   state.activeMidis.delete(Number(midi));
-  visual.setActiveMidis(state.activeMidis);
+  showHand();
   if (state.activeMidis.size === 0) setStatus("Ready to play");
 }
 
@@ -199,16 +208,16 @@ async function connectMidi() {
 midiButton.addEventListener("click", connectMidi);
 
 downloadButton.addEventListener("click", () => {
-  const blob = new Blob([visual.toSvgString()], { type: "image/svg+xml" });
-  const url = URL.createObjectURL(blob);
+  const file = visual.download(`musichands-${state.hand}-position`);
   const link = document.createElement("a");
-  link.href = url;
-  link.download = `musichands-${state.hand}-position.svg`;
+  link.href = file.href;
+  link.download = file.download;
   document.body.append(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (file.revoke) window.setTimeout(() => URL.revokeObjectURL(file.href), 1000);
 });
 
 renderFingerControls();
-updateVisual();
+updateVisual({ immediate: true });
+

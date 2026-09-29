@@ -6,6 +6,14 @@
     <meta name="theme-color" content="#f2eadb" />
     <title>MusicHands — Hand Position Studio</title>
     <link rel="stylesheet" href="./styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
   </head>
   <body>
     <main class="app-shell">
@@ -15,7 +23,7 @@
           <h1>Put the hand<br />on the music.</h1>
         </div>
         <p class="lede">
-          Shape a piano hand position, then play it. The diagram responds to
+          Shape a piano hand position, then play it. The hand responds to
           clicks, your computer keyboard, or a connected MIDI piano.
         </p>
       </header>
@@ -56,7 +64,7 @@
           <details class="control-section fine-tune">
             <summary>
               <span class="step-number">03</span>
-              <span>Fine-tune the drawing</span>
+              <span>Fine-tune the hand</span>
               <span class="summary-mark" aria-hidden="true">+</span>
             </summary>
             <div class="fine-tune-body">
@@ -69,7 +77,7 @@
                 <input id="curve" type="range" min="12" max="88" value="52" />
               </label>
               <label class="range-field">
-                <span>Hand weight <output id="weight-output">30</output></span>
+                <span>Hand size <output id="weight-output">30</output></span>
                 <input id="weight" type="range" min="22" max="40" value="30" />
               </label>
               <label class="check-field">
@@ -78,7 +86,7 @@
               </label>
               <label class="check-field">
                 <input id="show-guides" type="checkbox" checked />
-                <span>Show anchor guides</span>
+                <span>Show finger numbers</span>
               </label>
             </div>
           </details>
@@ -105,15 +113,15 @@
             </div>
             <div class="actions">
               <button class="button button--primary" id="midi-button" type="button">Connect MIDI</button>
-              <button class="button" id="download-button" type="button">Download SVG</button>
+              <button class="button" id="download-button" type="button">Download image</button>
             </div>
           </div>
         </div>
       </section>
 
       <footer class="footer-note">
-        <span>Prototype 001</span>
-        <p>The hand drawing is generated entirely from the five note assignments above.</p>
+        <span>Prototype 001 · <a class="crumb" href="./sheet.html">Open the sheet music view</a></span>
+        <p>The hand is posed entirely from the five note assignments above.</p>
       </footer>
     </main>
 

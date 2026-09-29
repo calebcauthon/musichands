@@ -38,7 +38,7 @@ test("keyboard window contains every assigned finger note with padding", () => {
 test("standalone SVG contains its drawing styles and assigned notes", () => {
   const fingers = ["C4", "D4", "E4", "F4", "G4"].map((note, index) => ({ finger: index + 1, note }));
   const svg = createHandKeyboardSvg({ hand: "right", fingers });
-  assert.match(svg, /<svg[^>]+viewBox="0 0 1040 430"/);
+  assert.match(svg, /<svg[^>]+viewBox="0 0 1040 520"/);
   assert.match(svg, /<style>/);
   assert.match(svg, /data-note="C4"/);
   assert.match(svg, /RIGHT HAND/);

@@ -1,21 +1,46 @@
 import { getKeyboardWindow, isBlackNote, midiToNote, noteToMidi } from "./hand-model.js";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const FINGER_ANATOMY = {
-  // Lengths and widths are normalized to the middle finger. Contact depths let
-  // a relaxed hand reach farther with the long middle fingers and stay nearer
-  // the player with the thumb and pinky while still landing on the assigned key.
-  // `knuckle` is how far below the middle-finger knuckle each finger's knuckle
-  // sits; `fan` is which way the finger bows when the hand relaxes.
-  1: { length: 0.72, width: 1.02, knuckle: 0, whiteDepth: 226, blackDepth: 172, fan: -1 },
-  2: { length: 0.91, width: 0.95, knuckle: 0.14, whiteDepth: 168, blackDepth: 118, fan: -0.8 },
-  3: { length: 1, width: 1, knuckle: 0, whiteDepth: 152, blackDepth: 102, fan: -0.15 },
-  4: { length: 0.94, width: 0.93, knuckle: 0.12, whiteDepth: 160, blackDepth: 110, fan: 0.35 },
-  5: { length: 0.74, width: 0.78, knuckle: 0.4, whiteDepth: 184, blackDepth: 134, fan: 1 },
+const VIEW_WIDTH = 1040;
+const VIEW_HEIGHT = 520;
+
+// Hand proportions in finger units (U): one unit is the width of the middle
+// finger at its knuckle. Everything is described for a right hand seen from
+// above, x running toward the pinky and y running toward the wrist; the left
+// hand is a mirror image. Knuckle positions are relative to the palm origin,
+// which sits on the knuckle line under the middle finger. The keys are drawn
+// foreshortened, so local y is squashed by FORESHORTEN to match.
+const FORESHORTEN = 0.68;
+const HAND = {
+  fingerLength: 4.6, // middle finger, knuckle to tip, before curl
+  // `splay` is the finger's relaxed angle from the palm axis; `splayLimit` is
+  // how far it can swing from that before the whole hand has to turn.
+  fingers: {
+    2: { width: 0.98, length: 0.92, knuckle: { x: -2.45, y: -0.15 }, splay: -7, splayLimit: 38, fan: -1, whiteDepth: 235, blackDepth: 150 },
+    3: { width: 1.0, length: 1.0, knuckle: { x: -0.82, y: -0.4 }, splay: -1, splayLimit: 26, fan: -0.3, whiteDepth: 225, blackDepth: 140 },
+    4: { width: 0.94, length: 0.95, knuckle: { x: 0.8, y: -0.2 }, splay: 5, splayLimit: 26, fan: 0.3, whiteDepth: 230, blackDepth: 145 },
+    5: { width: 0.82, length: 0.75, knuckle: { x: 2.35, y: 0.5 }, splay: 13, splayLimit: 42, fan: 1, whiteDepth: 250, blackDepth: 160 },
+  },
+  thumb: {
+    width: 1.22,
+    cmc: { x: -2.2, y: 4.0 }, // base joint, inside the palm near the wrist
+    metacarpal: 2.5, // base joint to knuckle, hidden inside the thenar
+    proximal: 1.35,
+    distal: 1.2,
+    bend: 26, // degrees of flex at the last joint
+    abduction: [18, 100], // degrees the metacarpal can swing out from the palm axis
+    rest: { x: -3.4, y: -4.0 }, // tip offset from the base joint when the thumb is idle
+    whiteDepth: 270,
+    blackDepth: 175,
+  },
 };
-const REFERENCE_FINGER_LENGTH = 136;
-// The "weight" control is in the old stroke units; real fingers are wider than that.
-const WIDTH_SCALE = 1.45;
+const FINGER_ORDER = [2, 3, 4, 5];
+const MAX_TURN = 12; // degrees the palm may rotate either way
+const MIN_CURL = 0.62; // a finger may curl down to this share of its drawn length, never stretch past it
+const THUMB_MIN_ANGLE = 22; // degrees from base joint to tip the thumb stays out from the finger axis
+// How far along a key a fingertip may sit, measured from the top of the key.
+const WHITE_DEPTH_RANGE = [90, 300]; // may reach up between the black keys
+const BLACK_DEPTH_RANGE = [100, 138];
 
 function escapeXml(value) {
   return String(value)
@@ -27,6 +52,25 @@ function escapeXml(value) {
 
 const fmt = (value) => Number(value).toFixed(1);
 const pt = (point) => `${fmt(point.x)} ${fmt(point.y)}`;
+const rad = (degrees) => (degrees * Math.PI) / 180;
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+const add = (a, b) => ({ x: a.x + b.x, y: a.y + b.y });
+const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y });
+const scale = (v, k) => ({ x: v.x * k, y: v.y * k });
+const len = (v) => Math.hypot(v.x, v.y);
+const norm = (v) => {
+  const length = len(v) || 1;
+  return { x: v.x / length, y: v.y / length };
+};
+const perp = (v) => ({ x: -v.y, y: v.x });
+const dot = (a, b) => a.x * b.x + a.y * b.y;
+const rot = (v, angle) => ({
+  x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+  y: v.x * Math.sin(angle) + v.y * Math.cos(angle),
+});
+const dist = (a, b) => len(sub(a, b));
+const signedAngle = (from, to) => Math.atan2(from.x * to.y - from.y * to.x, dot(from, to));
+const bump = (t, center, spread) => Math.exp(-(((t - center) / spread) ** 2));
 
 function bezierPoint(p0, p1, p2, p3, t) {
   const u = 1 - t;
@@ -38,10 +82,10 @@ function bezierPoint(p0, p1, p2, p3, t) {
 
 function bezierTangent(p0, p1, p2, p3, t) {
   const u = 1 - t;
-  const x = 3 * u * u * (p1.x - p0.x) + 6 * u * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x);
-  const y = 3 * u * u * (p1.y - p0.y) + 6 * u * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y);
-  const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length };
+  return norm({
+    x: 3 * u * u * (p1.x - p0.x) + 6 * u * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x),
+    y: 3 * u * u * (p1.y - p0.y) + 6 * u * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y),
+  });
 }
 
 // Smooth closed outline through a list of points (Catmull-Rom → cubic Béziers).
@@ -61,107 +105,96 @@ function smoothClosedPath(points) {
   return `${path} Z`;
 }
 
-const bump = (t, center, spread) => Math.exp(-(((t - center) / spread) ** 2));
-
-// Width of a finger along its length: a gentle taper, slightly fuller at the
-// joints, a soft pad at the tip. Thumbs start wide at the thenar and taper more.
-function widthProfile(finger, t) {
-  if (finger === 1) {
-    return 1.02 - 0.1 * Math.max(0, t) + 0.05 * bump(t, 0.5, 0.1) + 0.02 * bump(t, 0.92, 0.08);
-  }
-  return 1 - 0.15 * Math.max(0, t) + 0.045 * bump(t, 0.44, 0.09) + 0.035 * bump(t, 0.74, 0.08) + 0.02 * bump(t, 0.93, 0.08);
-}
-
-// Centerline of a finger from its knuckle to the contact point on the key.
-function fingerCurve(knuckle, tip, finger, anatomy, curveAmount, direction) {
-  const dx = tip.x - knuckle.x;
-  const dy = tip.y - knuckle.y;
-  if (finger === 1) {
-    // Only the two phalanges show: nearly straight, with a small bend at the
-    // joint that turns the tip in toward the other fingers.
-    const length = Math.hypot(dx, dy) || 1;
-    const outward = { x: (-direction * Math.abs(dy)) / length, y: -Math.abs(dx) / length };
-    const bow = curveAmount * 0.1;
-    return [
-      knuckle,
-      { x: knuckle.x + dx * 0.4 + outward.x * bow, y: knuckle.y + dy * 0.4 + outward.y * bow },
-      { x: tip.x - dx * 0.3 + outward.x * bow * 0.6, y: tip.y - dy * 0.3 + outward.y * bow * 0.6 },
-      tip,
-    ];
-  }
-  const bow = direction * anatomy.fan * curveAmount * 0.2;
-  return [
-    knuckle,
-    { x: knuckle.x + dx * 0.36 + bow, y: knuckle.y + dy * 0.36 },
-    { x: tip.x - dx * 0.08 + bow * 0.4, y: tip.y - dy * 0.32 },
-    tip,
-  ];
-}
-
-function buildFinger({ knuckle, tip, finger, anatomy, width, curveAmount, direction }) {
-  const [p0, p1, p2, p3] = fingerCurve(knuckle, tip, finger, anatomy, curveAmount, direction);
-  const sample = (t) => {
-    const point = bezierPoint(p0, p1, p2, p3, t);
-    const tangent = bezierTangent(p0, p1, p2, p3, t);
-    const normal = { x: -tangent.y, y: tangent.x };
-    const half = (width * widthProfile(finger, t)) / 2;
-    return { point, tangent, normal, half };
+// Open Catmull-Rom spline through the points, sampled by t in [0, 1] with one
+// equal share of t per segment. Returns the point and unit tangent at t.
+function splineSampler(points) {
+  const segments = points.length - 1;
+  const at = (index) => points[clamp(index, 0, points.length - 1)];
+  return (t) => {
+    const s = clamp(t, 0, 1) * segments;
+    const index = Math.min(Math.floor(s), segments - 1);
+    const u = s - index;
+    const p0 = at(index - 1);
+    const p1 = at(index);
+    const p2 = at(index + 1);
+    const p3 = at(index + 2);
+    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
+    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
+    return { point: bezierPoint(p1, c1, c2, p2, u), tangent: bezierTangent(p1, c1, c2, p2, u) };
   };
+}
 
+// Sweep a width profile along a centerline and close it with a fingertip pad.
+function buildTube(sampleAt, [tStart, tEnd], halfAt, steps = 22) {
   const left = [];
   const right = [];
-  const steps = 18;
-  // Start under the palm so the knuckle blends into the hand. The thumb reaches
-  // deeper because the palm edge passes beneath it rather than across its base.
-  const tStart = finger === 1 ? -0.45 : -0.16;
   for (let index = 0; index <= steps; index += 1) {
-    const t = tStart + (1 - tStart) * (index / steps);
-    const { point, normal, half } = sample(t);
-    left.push({ x: point.x + normal.x * half, y: point.y + normal.y * half });
-    right.push({ x: point.x - normal.x * half, y: point.y - normal.y * half });
+    const t = tStart + (tEnd - tStart) * (index / steps);
+    const { point, tangent } = sampleAt(t);
+    const normal = perp(tangent);
+    const half = halfAt(t);
+    left.push(add(point, scale(normal, half)));
+    right.push(sub(point, scale(normal, half)));
   }
-
-  const end = sample(1);
-  const capLength = end.half * 0.92;
+  const end = sampleAt(tEnd);
+  const half = halfAt(tEnd);
+  const normal = perp(end.tangent);
+  const capLength = half * 0.95;
   const cap = [];
   for (let index = 1; index < 8; index += 1) {
     const angle = Math.PI / 2 - (Math.PI * index) / 8;
     // Slightly squared fingertip pad rather than a pure semicircle.
     const along = Math.cos(angle) ** 0.85 * capLength;
-    const across = Math.sin(angle) * end.half;
-    cap.push({
-      x: end.point.x + end.tangent.x * along + end.normal.x * across,
-      y: end.point.y + end.tangent.y * along + end.normal.y * across,
-    });
+    const across = Math.sin(angle) * half;
+    cap.push(add(end.point, add(scale(end.tangent, along), scale(normal, across))));
   }
-
-  const outline = smoothClosedPath([...left, ...cap, ...right.reverse()]);
-  const tipEnd = { x: end.point.x + end.tangent.x * capLength, y: end.point.y + end.tangent.y * capLength };
-
-  const crease = (t, scale = 0.62) => {
-    const { point, tangent, normal, half } = sample(t);
-    const reach = half * scale;
-    const a = { x: point.x + normal.x * reach, y: point.y + normal.y * reach };
-    const b = { x: point.x - normal.x * reach, y: point.y - normal.y * reach };
-    const control = { x: point.x + tangent.x * half * 0.22, y: point.y + tangent.y * half * 0.22 };
-    return `M ${pt(a)} Q ${pt(control)} ${pt(b)}`;
+  return {
+    outline: smoothClosedPath([...left, ...cap, ...right.reverse()]),
+    tipEnd: add(end.point, scale(end.tangent, capLength)),
+    tangent: end.tangent,
+    normal,
+    tipHalf: half,
   };
-  const creases = finger === 1 ? [crease(0.5, 0.58)] : [crease(0.46), crease(0.75)];
-
-  const nailOffset = finger === 1 ? -direction * end.half * 0.2 : 0;
-  const nail = {
-    cx: end.point.x + end.normal.x * nailOffset - end.tangent.x * end.half * 0.05,
-    cy: end.point.y + end.normal.y * nailOffset - end.tangent.y * end.half * 0.05,
-    rx: end.half * (finger === 1 ? 0.5 : 0.58),
-    ry: end.half * (finger === 1 ? 0.62 : 0.68),
-    angle: (Math.atan2(end.tangent.y, end.tangent.x) * 180) / Math.PI + 90,
-  };
-
-  return { outline, creases, nail, tipEnd, tangent: end.tangent, tipHalf: end.half };
 }
 
-function keyboardGeometry(fingers) {
-  const whiteNotes = getKeyboardWindow(fingers);
+function creaseAt(sampleAt, t, half, reachScale = 0.62) {
+  const { point, tangent } = sampleAt(t);
+  const normal = perp(tangent);
+  const reach = half * reachScale;
+  const a = add(point, scale(normal, reach));
+  const b = sub(point, scale(normal, reach));
+  const control = add(point, scale(tangent, half * 0.22));
+  return `M ${pt(a)} Q ${pt(control)} ${pt(b)}`;
+}
+
+function nailAt(tube, { across, along, offset = 0 }) {
+  const center = add(sub(tube.tipEnd, scale(tube.tangent, along * 1.05)), scale(tube.normal, offset));
+  return {
+    cx: center.x,
+    cy: center.y,
+    rx: across,
+    ry: along,
+    angle: (Math.atan2(tube.tangent.y, tube.tangent.x) * 180) / Math.PI + 90,
+  };
+}
+
+// Width of a long finger along its visible length: a gentle taper, slightly
+// fuller at the joints, a soft pad at the tip.
+function fingerWidthProfile(t) {
+  const along = Math.max(0, t);
+  return 1 - 0.15 * along + 0.045 * bump(t, 0.47, 0.09) + 0.035 * bump(t, 0.76, 0.08) + 0.02 * bump(t, 0.93, 0.08);
+}
+
+// Thumb width along its centerline. t runs base joint (0) → knuckle (1/3) →
+// last joint (2/3) → tip (1), so the joints get their bulges at those marks.
+// The first third is the metacarpal inside the thenar, which is much broader.
+function thumbWidthProfile(t) {
+  const trunk = t < 0.33 ? 1.34 - 0.3 * (t / 0.33) : 1.04 - 0.14 * ((t - 0.33) / 0.67);
+  return trunk + 0.05 * bump(t, 0.33, 0.08) + 0.06 * bump(t, 0.67, 0.08) + 0.04 * bump(t, 0.9, 0.08);
+}
+
+function keyboardGeometry(fingers, hand) {
+  const whiteNotes = getKeyboardWindow(fingers, 12, hand);
   const keyboardX = 54;
   const keyboardY = 54;
   const keyboardWidth = 932;
@@ -200,152 +233,343 @@ function keyboardGeometry(fingers) {
   return { whites, blacks, keyByMidi, keyboardX, keyboardY, keyboardWidth, whiteHeight };
 }
 
-function handLayout({ hand, fingerTargets, weight, curve, palmHeight }) {
-  const direction = hand === "right" ? 1 : -1;
-  const W = Number(weight) * WIDTH_SCALE;
-  const curveAmount = Number(curve);
-  // A curled hand sits closer to the keys, so more curve means shorter reach.
-  const reachScale = 1.12 - (curveAmount / 88) * 0.28;
-  const gap = W * 0.2;
-  const byFinger = new Map(fingerTargets.map((finger) => [finger.finger, finger]));
-  const longFingers = [2, 3, 4, 5].map((finger) => byFinger.get(finger)).filter(Boolean);
-  const thumb = byFinger.get(1);
+// The palm frame: where the knuckle line sits and how the hand is turned.
+function makeFrame(origin, theta, U) {
+  const squash = (local) => ({ x: local.x * U, y: local.y * U * FORESHORTEN });
+  const unsquash = (v) => ({ x: v.x / U, y: v.y / (U * FORESHORTEN) });
+  return {
+    origin,
+    theta,
+    U,
+    toWorld: (local) => add(origin, rot(squash(local), theta)),
+    toLocal: (world) => unsquash(rot(sub(world, origin), -theta)),
+    direction: (local) => rot(local, theta),
+    up: rot({ x: 0, y: -1 }, theta),
+  };
+}
 
-  // Palm width comes straight from the fingers that have to fit across the knuckles.
-  const knuckleWidths = [2, 3, 4, 5].map((finger) => FINGER_ANATOMY[finger].width * W);
-  const palmWidth = knuckleWidths.reduce((total, width) => total + width, 0) + gap * 3;
-  const knuckleOffsets = {};
-  let cursor = -palmWidth / 2;
-  [2, 3, 4, 5].forEach((finger, index) => {
-    knuckleOffsets[finger] = cursor + knuckleWidths[index] / 2;
-    cursor += knuckleWidths[index] + gap;
-  });
+// Every finger is drawn at one fixed length; a curled finger seen from above
+// is this much of its true length.
+const drawnLength = (finger, U, curl) => HAND.fingerLength * HAND.fingers[finger].length * U * curl;
+const naturalDirection = (finger) => ({ x: Math.sin(rad(HAND.fingers[finger].splay)), y: -Math.cos(rad(HAND.fingers[finger].splay)) });
 
-  const fingerCenter = longFingers.length
-    ? longFingers.reduce((total, finger) => total + finger.x, 0) / longFingers.length
-    : fingerTargets.reduce((total, finger) => total + finger.x, 0) / fingerTargets.length;
-  let centerX = fingerCenter;
-  if (thumb) {
-    // Let a wide thumb reach pull the palm toward it a little, as a real hand would.
-    const thumbSideX = fingerCenter - direction * (palmWidth / 2 + W * 0.3);
-    const reach = Math.max(0, -direction * (thumb.x - thumbSideX) - 105);
-    centerX -= direction * reach * 0.3;
-  }
+function thumbChord(U) {
+  const p = HAND.thumb.proximal * U;
+  const q = HAND.thumb.distal * U;
+  const beta = rad(HAND.thumb.bend);
+  return {
+    length: Math.sqrt(p * p + q * q + 2 * p * q * Math.cos(beta)),
+    // Angle between the proximal segment and the straight line to the tip.
+    offset: Math.atan2(q * Math.sin(beta), p + q * Math.cos(beta)),
+  };
+}
 
-  // Place the knuckle line so every finger's drawn length is close to its real length.
-  const estimates = [];
-  (longFingers.length ? longFingers : fingerTargets).forEach((finger) => {
-    const anatomy = finger.anatomy;
-    const length = REFERENCE_FINGER_LENGTH * anatomy.length * reachScale;
-    const baseX = centerX + direction * (knuckleOffsets[finger.finger] ?? -palmWidth / 2);
-    const dx = finger.x - baseX;
-    const dy = Math.sqrt(Math.max(length * length - dx * dx, (length * 0.72) ** 2));
-    estimates.push({ palmY: finger.y + dy - anatomy.knuckle * W, weight: 1 });
-  });
-  const totalWeight = estimates.reduce((total, entry) => total + entry.weight, 0);
-  const meanPalmY = estimates.reduce((total, entry) => total + entry.palmY * entry.weight, 0) / totalWeight;
-  // A stretched hand moves in toward the keys and curls its middle fingers,
-  // rather than bending the outer fingers sideways from far away.
-  const nearestPalmY = Math.min(...estimates.map((entry) => entry.palmY));
-  const naturalPalmY = meanPalmY * 0.5 + nearestPalmY * 0.5;
-  const palmY = naturalPalmY - (Number(palmHeight) - 44) * 0.55;
-
-  const local = (x, y) => ({ x: centerX + direction * x, y });
-  const half = palmWidth / 2;
-  const wristY = palmY + W * 5;
-  const wristThumbCorner = local(-half - W * 0.1, wristY);
-  let thumbJoint = null;
-  let thumbAxis = null;
-  if (thumb) {
-    // The thumb's metacarpal lies inside the palm (the thenar bulge), so the
-    // visible thumb starts at the joint on the palm's edge and points at the key.
-    // Aim the thumb ray at the middle of the wrist rather than its corner, so
-    // the thumb sits at a natural angle to the fingers instead of parallel.
-    const wristTarget = local(-half * 0.2, wristY + W * 0.4);
-    const toWrist = { x: wristTarget.x - thumb.x, y: wristTarget.y - thumb.y };
-    const distance = Math.hypot(toWrist.x, toWrist.y) || 1;
-    const unit = { x: toWrist.x / distance, y: toWrist.y / distance };
-    let length = REFERENCE_FINGER_LENGTH * FINGER_ANATOMY[1].length * reachScale;
-    const lowestJointY = palmY + W * 0.45;
-    if (unit.y > 0 && thumb.y + unit.y * length < lowestJointY) length = (lowestJointY - thumb.y) / unit.y;
-    length = Math.min(length, distance * 0.62);
-    thumbJoint = { x: thumb.x + unit.x * length, y: thumb.y + unit.y * length };
-    thumbAxis = unit;
-  }
-
-  const fingers = fingerTargets.map((finger) => {
-    const anatomy = finger.anatomy;
-    const knuckle = finger.finger === 1
-      ? thumbJoint
-      : { x: centerX + direction * knuckleOffsets[finger.finger], y: palmY + anatomy.knuckle * W };
-    const shape = buildFinger({
-      knuckle,
-      tip: { x: finger.x, y: finger.y },
-      finger: finger.finger,
-      anatomy,
-      width: W * anatomy.width,
-      curveAmount,
-      direction,
-    });
-    return { ...finger, knuckle, ...shape };
-  });
-
-  // Back of the hand: scalloped knuckle line, hypothenar bulge on the pinky
-  // side, thenar swell where the thumb leaves the palm, wrist running off-canvas.
-  const knuckleY = (finger) => palmY + FINGER_ANATOMY[finger].knuckle * W;
-  const top = [];
-  [2, 3, 4, 5].forEach((finger, index) => {
-    top.push(local(knuckleOffsets[finger], knuckleY(finger) - W * 0.08));
-    if (finger !== 5) {
-      const next = [2, 3, 4, 5][index + 1];
-      const notchX = (knuckleOffsets[finger] + knuckleOffsets[next]) / 2;
-      top.push(local(notchX, Math.max(knuckleY(finger), knuckleY(next)) + W * 0.14));
-    }
-  });
-  const indexWeb = local(-half + W * 0.06, knuckleY(2) + W * 0.5);
-  let thumbSide;
-  if (thumbJoint) {
-    // Thenar bulge from the wrist out to the thumb joint, across the base of
-    // the thumb, then the web curving back in to the index knuckle.
-    const palmCenter = local(0, palmY + W * 2);
-    let outward = { x: -thumbAxis.y, y: thumbAxis.x };
-    if (outward.x * (thumbJoint.x - palmCenter.x) + outward.y * (thumbJoint.y - palmCenter.y) < 0) {
-      outward = { x: -outward.x, y: -outward.y };
-    }
-    const along = { x: thumbJoint.x - wristThumbCorner.x, y: thumbJoint.y - wristThumbCorner.y };
-    const thenar = {
-      x: wristThumbCorner.x + along.x * 0.45 + outward.x * W * 0.38,
-      y: wristThumbCorner.y + along.y * 0.45 + outward.y * W * 0.38,
-    };
-    // This point sits under the thumb, so the thumb's own outline forms the edge.
-    const underThumb = { x: thumbJoint.x + thumbAxis.x * W * 0.3, y: thumbJoint.y + thumbAxis.y * W * 0.3 };
-    const toCenter = { x: palmCenter.x - (underThumb.x + indexWeb.x) / 2, y: palmCenter.y - (underThumb.y + indexWeb.y) / 2 };
-    const toCenterLength = Math.hypot(toCenter.x, toCenter.y) || 1;
-    const web = {
-      x: (underThumb.x + indexWeb.x) / 2 + (toCenter.x / toCenterLength) * W * 0.18,
-      y: (underThumb.y + indexWeb.y) / 2 + (toCenter.y / toCenterLength) * W * 0.18,
-    };
-    thumbSide = [thenar, underThumb, web];
+// The thumb's joints for a given tip: the metacarpal swings out from the base
+// joint as far as it must (within its range), and the two visible segments,
+// of fixed length, run from the knuckle to the tip. `residual` is how much
+// longer or shorter than real the visible thumb would have to be.
+function thumbJoints(tip, frame) {
+  const { U } = frame;
+  const cmc = frame.toWorld(HAND.thumb.cmc);
+  const palmCenter = frame.toWorld({ x: 0, y: 2.2 });
+  const a = HAND.thumb.metacarpal * U;
+  const chord = thumbChord(U);
+  const v = sub(tip, cmc);
+  const distance = len(v) || 1;
+  const u = norm(v);
+  let metacarpalDirection;
+  if (distance >= a + chord.length) {
+    metacarpalDirection = u;
   } else {
-    thumbSide = [
-      local(-half - W * 0.5, palmY + W * 3.3),
-      local(-half - W * 0.55, palmY + W * 2.1),
-      local(-half - W * 0.28, palmY + W * 1.15),
-    ];
+    const along = (distance * distance + a * a - chord.length * chord.length) / (2 * distance);
+    const lift = Math.sqrt(Math.max(a * a - along * along, 0));
+    const foot = add(cmc, scale(u, along));
+    const candidates = [add(foot, scale(perp(u), lift)), add(foot, scale(perp(u), -lift))];
+    // The knuckle bulges away from the palm.
+    const mcp = candidates.sort((p, q) => dist(q, palmCenter) - dist(p, palmCenter))[0];
+    metacarpalDirection = norm(sub(mcp, cmc));
   }
-  const palmPoints = [
-    ...top,
-    local(half + W * 0.12, knuckleY(5) + W * 0.5),
-    local(half + W * 0.26, palmY + W * 2.5),
-    local(half + W * 0.1, wristY),
-    local(0, wristY + W * 0.15),
-    wristThumbCorner,
-    ...thumbSide,
-    indexWeb,
-  ];
-  const palmPath = smoothClosedPath(palmPoints);
+  // Keep the metacarpal within the range a thumb can actually swing.
+  const [minOut, maxOut] = HAND.thumb.abduction.map(rad);
+  const outAngle = -signedAngle(frame.up, metacarpalDirection);
+  const clampedOut = clamp(outAngle, minOut, maxOut);
+  if (clampedOut !== outAngle) metacarpalDirection = rot(frame.up, -clampedOut);
+  const mcp = add(cmc, scale(metacarpalDirection, a));
+  const chordVector = sub(tip, mcp);
+  const chordDirection = norm(chordVector);
+  const residual = len(chordVector) - chord.length;
+  const options = [1, -1].map((sign) => {
+    const proximalDirection = rot(chordDirection, -sign * chord.offset);
+    return { proximalDirection, ip: add(mcp, scale(proximalDirection, HAND.thumb.proximal * U)) };
+  });
+  // The last joint bends toward the palm, so it too bulges away from it.
+  const { proximalDirection, ip } = options.sort((p, q) => dist(q.ip, palmCenter) - dist(p.ip, palmCenter))[0];
+  return { cmc, mcp, ip, tip, proximalDirection, metacarpalDirection, chordDirection, residual, palmCenter };
+}
 
-  return { fingers, palmPath, centerX, palmY, palmWidth, direction };
+// Where a fingertip must sit on its key for the finger to keep its length,
+// given where the knuckle is. The tip slides along the key; only when the key
+// is out of reach does the finger's drawn length have to give.
+function tipOnKey(target, knuckle, length) {
+  const dx = target.x - knuckle.x;
+  const ideal = Math.abs(dx) < length ? knuckle.y - Math.sqrt(length * length - dx * dx) : knuckle.y;
+  return { x: target.x, y: clamp(ideal, target.depthRange[0], target.depthRange[1]) };
+}
+
+// Slide and turn the palm until every assigned finger, at its fixed length,
+// lands on its key, no finger has to splay further than a real one can, and
+// the thumb comes in from the side at a natural angle.
+function solveFrame({ targets, thumbTarget, U, curl, palmOffset, floorY }) {
+  const fingers = FINGER_ORDER.map((finger) => targets.get(finger)).filter(Boolean);
+  const knuckleWorld = (finger, frame) => frame.toWorld(HAND.fingers[finger].knuckle);
+
+  let theta = 0;
+  if (fingers.length >= 2) {
+    const first = fingers[0];
+    const last = fingers[fingers.length - 1];
+    const tipAngle = Math.atan2(last.defaultY - first.defaultY, last.x - first.x);
+    const knuckleAngle = Math.atan2(
+      (HAND.fingers[last.finger].knuckle.y - HAND.fingers[first.finger].knuckle.y) * FORESHORTEN,
+      HAND.fingers[last.finger].knuckle.x - HAND.fingers[first.finger].knuckle.x,
+    );
+    theta = clamp((tipAngle - knuckleAngle) * 0.35, rad(-MAX_TURN), rad(MAX_TURN));
+  }
+
+  let frame = makeFrame({ x: 0, y: 0 }, theta, U);
+  let origin;
+  if (fingers.length) {
+    const sum = fingers.reduce((total, target) => {
+      const reach = scale(rot(naturalDirection(target.finger), theta), drawnLength(target.finger, U, curl));
+      const estimate = sub({ x: target.x, y: target.defaultY }, add(sub(knuckleWorld(target.finger, frame), frame.origin), reach));
+      return add(total, estimate);
+    }, { x: 0, y: 0 });
+    origin = scale(sum, 1 / fingers.length);
+  } else {
+    // Thumb alone: rest the palm to its pinky side with the thumb reaching out.
+    const reach = (HAND.thumb.metacarpal * U + thumbChord(U).length) * 0.8;
+    const cmcOffset = sub(frame.toWorld(HAND.thumb.cmc), frame.origin);
+    origin = sub({ x: thumbTarget.x, y: thumbTarget.defaultY }, add(cmcOffset, scale({ x: -0.6, y: -0.8 }, reach)));
+  }
+  origin = add(origin, { x: 0, y: palmOffset });
+  const restY = floorY + palmOffset;
+  if (origin.y < restY) origin.y = restY;
+
+  for (let iteration = 0; iteration < 120; iteration += 1) {
+    frame = makeFrame(origin, theta, U);
+    // Prefer the knuckles at or below the front of the keys.
+    let move = { x: 0, y: origin.y < restY ? (restY - origin.y) * 0.25 : 0 };
+    let turn = 0;
+    const pull = (joint, u, amount) => {
+      move = add(move, scale(u, amount));
+      const arm = sub(joint, origin);
+      const armLength = len(arm) || 1;
+      turn += (dot(perp(arm), u) * amount) / (armLength * armLength) * 0.6 * armLength;
+    };
+    for (const target of fingers) {
+      const knuckle = knuckleWorld(target.finger, frame);
+      const length = drawnLength(target.finger, U, curl);
+      const tip = tipOnKey(target, knuckle, length);
+      const v = sub(tip, knuckle);
+      const u = norm(v);
+      const residual = len(v) - length;
+      // Fingers never stretch past their length; they may curl shorter, but
+      // drift back toward full length when nothing stops them.
+      if (residual > 0) pull(knuckle, u, residual);
+      else if (residual < -(1 - MIN_CURL) * length) pull(knuckle, u, residual + (1 - MIN_CURL) * length);
+      else pull(knuckle, u, residual * 0.15);
+      // Drift toward each finger's comfortable depth on the key.
+      move.y += (target.defaultY - tip.y) * 0.12;
+      const deviation = signedAngle(frame.direction(naturalDirection(target.finger)), u);
+      const limit = rad(HAND.fingers[target.finger].splayLimit);
+      if (Math.abs(deviation) > limit) turn += Math.sign(deviation) * (Math.abs(deviation) - limit) * 0.5;
+    }
+    if (thumbTarget) {
+      const cmc = frame.toWorld(HAND.thumb.cmc);
+      const probe = tipOnKey(thumbTarget, cmc, HAND.thumb.metacarpal * U + thumbChord(U).length * 0.9);
+      const joints = thumbJoints(probe, frame);
+      pull(joints.mcp, joints.chordDirection, joints.residual);
+      move.y += (thumbTarget.defaultY - probe.y) * 0.12;
+      // A thumb never points straight up beside the fingers: it comes in from
+      // the side, so slide the palm toward the pinky until it does.
+      const outAngle = -signedAngle(frame.up, norm(sub(probe, cmc)));
+      if (outAngle < rad(THUMB_MIN_ANGLE)) {
+        move = add(move, scale(rot({ x: 1, y: 0 }, theta), (rad(THUMB_MIN_ANGLE) - outAngle) * U * 0.8));
+      }
+    }
+    const count = fingers.length + (thumbTarget ? 1 : 0);
+    move = scale(move, 0.7 / Math.max(1, count * 0.6));
+    if (len(move) < 0.05 && Math.abs(turn) < 0.0005) break;
+    origin = add(origin, move);
+    theta = clamp(theta + turn * 0.5, rad(-MAX_TURN), rad(MAX_TURN));
+  }
+  return makeFrame(origin, theta, U);
+}
+
+// Where idle fingers hover: between their assigned neighbours, following the
+// hand's spread, slightly shorter because they are lifted off the keys.
+function restingTip(finger, placedTips, frame, curl) {
+  const { U } = frame;
+  const knuckle = frame.toWorld(HAND.fingers[finger].knuckle);
+  const deviationOf = (other) => {
+    const tip = placedTips.get(other);
+    if (!tip) return null;
+    return signedAngle(frame.direction(naturalDirection(other)), norm(sub(tip, frame.toWorld(HAND.fingers[other].knuckle))));
+  };
+  const lower = FINGER_ORDER.filter((other) => other < finger).map(deviationOf).filter((d) => d !== null).pop();
+  const upper = FINGER_ORDER.filter((other) => other > finger).map(deviationOf).filter((d) => d !== null)[0];
+  let deviation = 0;
+  if (lower !== undefined && upper !== undefined) deviation = (lower + upper) / 2;
+  else if (lower !== undefined || upper !== undefined) deviation = (lower ?? upper) * 0.8;
+  const direction = rot(frame.direction(naturalDirection(finger)), deviation);
+  return add(knuckle, scale(direction, drawnLength(finger, U, curl) * 0.96));
+}
+
+function buildFinger({ finger, tip, frame, width, targeted, curl }) {
+  const knuckle = frame.toWorld(HAND.fingers[finger].knuckle);
+  const v = sub(tip, knuckle);
+  const distance = len(v) || 1;
+  const u = norm(v);
+  const stretch = distance / (HAND.fingerLength * HAND.fingers[finger].length * frame.U);
+  // A faint sideways bow in the direction the finger fans when the hand relaxes.
+  const bow = scale(perp(u), distance * 0.035 * HAND.fingers[finger].fan);
+  const p0 = knuckle;
+  const p1 = add(add(knuckle, scale(v, 0.36)), bow);
+  const p2 = add(add(knuckle, scale(v, 0.72)), scale(bow, 0.6));
+  const p3 = tip;
+  const sampleAt = (t) => ({ point: bezierPoint(p0, p1, p2, p3, t), tangent: bezierTangent(p0, p1, p2, p3, t) });
+  const halfAt = (t) => (width * fingerWidthProfile(t)) / 2;
+  // Start well behind the knuckle so the finger runs in under the palm.
+  const tube = buildTube(sampleAt, [-0.3, 1], halfAt);
+  const creases = [creaseAt(sampleAt, 0.47, halfAt(0.47)), creaseAt(sampleAt, 0.76, halfAt(0.76))];
+  // A curled finger shows less of its nail from above.
+  const nail = nailAt(tube, { across: tube.tipHalf * 0.55, along: tube.tipHalf * (0.5 + 0.4 * Math.min(1, stretch / curl)) });
+  return { finger, tip, knuckle, targeted, ...tube, creases, nail };
+}
+
+// The visible thumb: the two segments from the knuckle at the palm's edge to
+// the tip, with a bend at the last joint. The metacarpal behind the knuckle is
+// buried in the thenar and drawn as part of the palm.
+function buildThumb({ tip, frame, width, targeted }) {
+  const { U } = frame;
+  const joints = thumbJoints(tip, frame);
+  const { mcp, ip, proximalDirection, palmCenter } = joints;
+  const base = sub(mcp, scale(proximalDirection, 0.8 * U));
+  const sampleAt = splineSampler([base, mcp, ip, tip]);
+  const halfAt = (t) => (width * thumbWidthProfile(t)) / 2;
+  const tube = buildTube(sampleAt, [0, 1], halfAt, 30);
+  const creases = [creaseAt(sampleAt, 0.67, halfAt(0.67), 0.7), creaseAt(sampleAt, 0.36, halfAt(0.36), 0.42)];
+  // Seen from above, the nail sits toward the outer edge of the tip.
+  let outward = perp(tube.tangent);
+  if (dot(outward, sub(tube.tipEnd, palmCenter)) < 0) outward = scale(outward, -1);
+  const nail = nailAt(tube, {
+    across: tube.tipHalf * 0.5,
+    along: tube.tipHalf * 0.8,
+    offset: dot(outward, tube.normal) * tube.tipHalf * 0.22,
+  });
+  return { finger: 1, tip, targeted, ...tube, creases, nail, joints };
+}
+
+// Back of the hand: scalloped knuckle line, hypothenar bulge on the pinky
+// side, the wrist running off the bottom of the picture, then the thenar mass
+// wrapping the thumb's metacarpal and the web curving back to the index.
+function buildPalm(frame, thumb, thumbWidth) {
+  const { toWorld, toLocal } = frame;
+  const knuckles = HAND.fingers;
+  const top = [];
+  FINGER_ORDER.forEach((finger, index) => {
+    const knuckle = knuckles[finger].knuckle;
+    top.push({ x: knuckle.x, y: knuckle.y - 0.3 });
+    if (finger !== 5) {
+      const next = knuckles[FINGER_ORDER[index + 1]].knuckle;
+      top.push({ x: (knuckle.x + next.x) / 2, y: Math.max(knuckle.y, next.y) + 0.25 });
+    }
+  });
+  const { cmc, mcp, proximalDirection, metacarpalDirection } = thumb.joints;
+  const halfThumb = thumbWidth / 2;
+  const palmCenter = frame.toWorld({ x: 0, y: 2.2 });
+  let outward = perp(metacarpalDirection);
+  if (dot(outward, sub(mcp, palmCenter)) < 0) outward = scale(outward, -1);
+  let proximalOutward = perp(proximalDirection);
+  if (dot(proximalOutward, sub(mcp, palmCenter)) < 0) proximalOutward = scale(proximalOutward, -1);
+  const thenarA = add(add(cmc, scale(sub(mcp, cmc), 0.3)), scale(outward, halfThumb * 1.5));
+  const thenarB = add(add(cmc, scale(sub(mcp, cmc), 0.72)), scale(outward, halfThumb * 1.3));
+  const knuckleOuter = add(mcp, scale(proximalOutward, halfThumb * 1.05));
+  const webStart = add(add(mcp, scale(proximalDirection, 0.6 * frame.U)), scale(proximalOutward, -halfThumb * 0.95));
+  const indexSide = toWorld({ x: -3.15, y: 0.6 });
+  const webMid = scale(add(webStart, indexSide), 0.5);
+  const web = add(webMid, scale(norm(sub(palmCenter, webMid)), 0.3 * frame.U));
+  const points = [
+    ...top.map(toWorld),
+    toWorld({ x: 3.35, y: 1.0 }),
+    toWorld({ x: 3.8, y: 2.6 }),
+    toWorld({ x: 3.5, y: 4.3 }),
+    toWorld({ x: 2.8, y: 5.3 }),
+    toWorld({ x: 0.4, y: 5.6 }),
+    toWorld({ x: -2.0, y: 5.4 }),
+    toWorld({ x: -2.9, y: 4.6 }),
+    thenarA,
+    thenarB,
+    knuckleOuter,
+    webStart,
+    web,
+    indexSide,
+  ];
+  return smoothClosedPath(points);
+}
+
+function layoutAtScale({ fingerTargets, U, curl, palmOffset, floorY }) {
+  const targets = new Map(fingerTargets.map((target) => [target.finger, target]));
+  const thumbTarget = targets.get(1) ?? null;
+  const frame = solveFrame({ targets, thumbTarget, U, curl, palmOffset, floorY });
+
+  // Final tip positions: assigned fingers slide along their keys to keep
+  // their length; anything left over is how far the drawing had to cheat.
+  const placedTips = new Map();
+  let worstCheat = 0;
+  for (const finger of FINGER_ORDER) {
+    const target = targets.get(finger);
+    if (!target) continue;
+    const length = drawnLength(finger, U, curl);
+    const knuckle = frame.toWorld(HAND.fingers[finger].knuckle);
+    const tip = tipOnKey(target, knuckle, length);
+    placedTips.set(finger, tip);
+    const residual = dist(tip, knuckle) - length;
+    worstCheat = Math.max(worstCheat, residual > 0 ? residual / length : Math.max(0, -residual - (1 - MIN_CURL) * length) / length);
+  }
+  let thumbTip;
+  if (thumbTarget) {
+    const cmc = frame.toWorld(HAND.thumb.cmc);
+    thumbTip = tipOnKey(thumbTarget, cmc, HAND.thumb.metacarpal * U + thumbChord(U).length * 0.9);
+    const joints = thumbJoints(thumbTip, frame);
+    worstCheat = Math.max(worstCheat, Math.abs(joints.residual) / thumbChord(U).length);
+  } else {
+    thumbTip = frame.toWorld(add(HAND.thumb.cmc, HAND.thumb.rest));
+  }
+
+  const fingers = FINGER_ORDER.map((finger) => {
+    const tip = placedTips.get(finger) ?? restingTip(finger, placedTips, frame, curl);
+    return buildFinger({ finger, tip, frame, width: U * HAND.fingers[finger].width, targeted: placedTips.has(finger), curl });
+  });
+  const thumbWidth = U * HAND.thumb.width;
+  const thumb = buildThumb({ tip: thumbTip, frame, width: thumbWidth, targeted: Boolean(thumbTarget) });
+  const palmPath = buildPalm(frame, thumb, thumbWidth);
+  return { fingers: [thumb, ...fingers], palmPath, frame, worstCheat };
+}
+
+function handLayout({ fingerTargets, weight, curve, palmHeight, floorY }) {
+  const baseU = Number(weight) * 1.6;
+  const curl = 0.62 - ((clamp(Number(curve), 12, 88) - 12) / 76) * 0.14;
+  const palmOffset = (Number(palmHeight) - 44) * 0.9;
+  // A span the hand cannot cover gets a slightly bigger hand rather than
+  // longer fingers, and only as much bigger as it needs.
+  let best = null;
+  for (const grow of [1, 1.08, 1.16, 1.24]) {
+    const U = baseU * grow;
+    const layout = layoutAtScale({ fingerTargets, U, curl, palmOffset: palmOffset, floorY: floorY + 0.2 * U });
+    if (!best || layout.worstCheat < best.worstCheat - 0.02) best = layout;
+    if (layout.worstCheat < 0.06) break;
+  }
+  return best;
 }
 
 export function createHandKeyboardSvg(config) {
@@ -360,19 +584,32 @@ export function createHandKeyboardSvg(config) {
     showGuides = true,
   } = config;
 
-  const geometry = keyboardGeometry(fingers);
+  const mirrored = hand === "left";
+  // The hand is modelled as a right hand; a left hand is drawn in a mirrored
+  // frame and its annotations are mapped back with `place`.
+  const place = (point) => (mirrored ? { x: VIEW_WIDTH - point.x, y: point.y } : point);
+
+  const geometry = keyboardGeometry(fingers, hand);
   const activeSet = new Set([...activeMidis].map(Number));
   const fingerByMidi = new Map(fingers.map((finger) => [noteToMidi(finger.note), finger]));
   const assignedSet = new Set(fingerByMidi.keys());
   const fingerTargets = fingers.map((finger) => {
     const midi = noteToMidi(finger.note);
     const key = geometry.keyByMidi.get(midi);
-    const anatomy = FINGER_ANATOMY[finger.finger];
-    const targetY = key.y + (isBlackNote(finger.note) ? anatomy.blackDepth : anatomy.whiteDepth);
-    return { ...finger, anatomy, midi, x: key.centerX, y: targetY };
+    const anatomy = finger.finger === 1 ? HAND.thumb : HAND.fingers[finger.finger];
+    const black = isBlackNote(finger.note);
+    const range = black ? BLACK_DEPTH_RANGE : WHITE_DEPTH_RANGE;
+    return {
+      ...finger,
+      midi,
+      x: place({ x: key.centerX, y: 0 }).x,
+      defaultY: key.y + (black ? anatomy.blackDepth : anatomy.whiteDepth),
+      depthRange: [key.y + range[0], key.y + range[1]],
+    };
   });
+  const midiByFinger = new Map(fingerTargets.map((target) => [target.finger, target.midi]));
 
-  const layout = handLayout({ hand, fingerTargets, weight, curve, palmHeight });
+  const layout = handLayout({ fingerTargets, weight, curve, palmHeight, floorY: geometry.keyboardY + geometry.whiteHeight });
   const whiteKeys = geometry.whites.map((key) => {
     const assigned = assignedSet.has(key.midi);
     const active = activeSet.has(key.midi);
@@ -399,38 +636,41 @@ export function createHandKeyboardSvg(config) {
       </g>`;
   }).join("");
 
-  const badgeFor = (finger) => ({
-    x: finger.tipEnd.x + finger.tangent.x * 17,
-    y: finger.tipEnd.y + finger.tangent.y * 17,
-  });
+  const playing = layout.fingers.filter((finger) => finger.targeted);
+  const isActive = (finger) => activeSet.has(midiByFinger.get(finger.finger));
+  const badgeFor = (finger) => place(add(finger.tipEnd, scale(finger.tangent, 17)));
 
   const guideLines = showGuides
-    ? layout.fingers
+    ? playing
         .filter((finger) => finger.finger === 1 || finger.finger === 5)
         .map((finger) => {
           const badge = badgeFor(finger);
+          const tip = place(finger.tip);
           return `
           <g class="anchor-guide">
-            <line x1="${fmt(finger.x)}" y1="${fmt(badge.y - 14)}" x2="${fmt(finger.x)}" y2="39" />
-            <text x="${fmt(finger.x)}" y="31" text-anchor="middle">${finger.finger === 1 ? "THUMB" : "PINKY"}</text>
+            <line x1="${fmt(tip.x)}" y1="${fmt(badge.y - 14)}" x2="${fmt(tip.x)}" y2="39" />
+            <text x="${fmt(tip.x)}" y="31" text-anchor="middle">${finger.finger === 1 ? "THUMB" : "PINKY"}</text>
           </g>`;
         })
         .join("")
     : "";
 
-  const halos = layout.fingers.map((finger) => `
-      <circle class="touch-halo ${activeSet.has(finger.midi) ? "is-active" : ""}" data-finger="${finger.finger}" cx="${fmt(finger.x)}" cy="${fmt(finger.y)}" r="${fmt(finger.tipHalf * 1.5)}" />`).join("");
+  const halos = playing.map((finger) => {
+    const tip = place(finger.tip);
+    return `
+      <circle class="touch-halo ${isActive(finger) ? "is-active" : ""}" data-finger="${finger.finger}" cx="${fmt(tip.x)}" cy="${fmt(tip.y)}" r="${fmt(finger.tipHalf * 1.5)}" />`;
+  }).join("");
 
   const fingerShapes = layout.fingers.map((finger) => `
         <path class="finger-fill" data-finger="${finger.finger}" d="${finger.outline}" />`).join("");
 
   const fingerDetails = layout.fingers.map((finger) => `
-      <g class="hand-finger ${activeSet.has(finger.midi) ? "is-active" : ""}" data-finger="${finger.finger}">
+      <g class="hand-finger ${isActive(finger) ? "is-active" : ""} ${finger.targeted ? "" : "is-resting"}" data-finger="${finger.finger}">
         ${finger.creases.map((crease) => `<path class="finger-crease" d="${crease}" />`).join("")}
         <ellipse class="fingernail" cx="${fmt(finger.nail.cx)}" cy="${fmt(finger.nail.cy)}" rx="${fmt(finger.nail.rx)}" ry="${fmt(finger.nail.ry)}" transform="rotate(${fmt(finger.nail.angle)} ${fmt(finger.nail.cx)} ${fmt(finger.nail.cy)})" />
       </g>`).join("");
 
-  const badges = layout.fingers.map((finger) => {
+  const badges = playing.map((finger) => {
     const badge = badgeFor(finger);
     return `
       <g class="finger-badge" data-finger="${finger.finger}">
@@ -441,11 +681,11 @@ export function createHandKeyboardSvg(config) {
 
   const handLabel = hand === "right" ? "RIGHT HAND" : "LEFT HAND";
   const playerViewLabel = `PLAYER VIEW · ${handLabel}`;
-  const glowX = layout.centerX;
-  const glowY = layout.palmY + Number(weight) * 0.6;
+  const glow = layout.frame.toWorld({ x: 0, y: 1.6 });
+  const handTransform = mirrored ? ` transform="translate(${VIEW_WIDTH} 0) scale(-1 1)"` : "";
 
   return `
-    <svg class="hand-keyboard" xmlns="${SVG_NS}" viewBox="0 0 1040 430" role="img" aria-label="${handLabel.toLowerCase()} positioned on a piano keyboard">
+    <svg class="hand-keyboard" xmlns="${SVG_NS}" viewBox="0 0 ${VIEW_WIDTH} ${VIEW_HEIGHT}" role="img" aria-label="${handLabel.toLowerCase()} positioned on a piano keyboard">
       <defs>
         <style>
           .hand-keyboard { --paper: #f5edde; --ink: #302016; --ink-soft: #715d50; --clay: #bd512f; --clay-deep: #82351f; --gold: #e9a63a; font-family: "Avenir Next", "Gill Sans", sans-serif; }
@@ -468,12 +708,13 @@ export function createHandKeyboardSvg(config) {
           .palm, .finger-fill { fill: url(#hand-skin); stroke: none; }
           .finger-crease { fill: none; stroke: #b47c62; stroke-opacity: 0.42; stroke-linecap: round; stroke-width: 1.2; }
           .fingernail { fill: #f6dccf; stroke: #cf9c86; stroke-width: 0.9; }
+          .hand-finger.is-resting .fingernail { fill-opacity: 0.8; }
           .finger-badge circle { fill: var(--paper); stroke: var(--clay); stroke-width: 1.2; }
           .finger-number { fill: var(--clay-deep); font-family: Baskerville, serif; font-size: 12px; font-style: italic; font-weight: 700; }
           .touch-halo { fill: transparent; }
           .touch-halo.is-active { fill: #e9a63a80; filter: url(#active-glow); }
         </style>
-        <radialGradient id="hand-skin" gradientUnits="userSpaceOnUse" cx="${fmt(glowX)}" cy="${fmt(glowY)}" r="${fmt(layout.palmWidth * 2.1)}">
+        <radialGradient id="hand-skin" gradientUnits="userSpaceOnUse" cx="${fmt(glow.x)}" cy="${fmt(glow.y)}" r="${fmt(layout.frame.U * 8)}">
           <stop offset="0" stop-color="#f7dcc8" />
           <stop offset="0.45" stop-color="#f2cdb2" />
           <stop offset="1" stop-color="#e8b696" />
@@ -499,8 +740,8 @@ export function createHandKeyboardSvg(config) {
         </filter>
       </defs>
 
-      <text class="diagram-label" x="54" y="414">${playerViewLabel}</text>
-      <text class="diagram-hint" x="986" y="414" text-anchor="end">WRIST BELOW · KEYS ABOVE</text>
+      <text class="diagram-label" x="54" y="${VIEW_HEIGHT - 16}">${playerViewLabel}</text>
+      <text class="diagram-hint" x="986" y="${VIEW_HEIGHT - 16}" text-anchor="end">WRIST BELOW · KEYS ABOVE</text>
 
       <g class="keyboard-shadow">
         <rect x="${geometry.keyboardX - 8}" y="${geometry.keyboardY - 8}" width="${geometry.keyboardWidth + 16}" height="${geometry.whiteHeight + 16}" rx="9" />
@@ -510,11 +751,11 @@ export function createHandKeyboardSvg(config) {
       ${guideLines}
       ${halos}
 
-      <g class="hand" filter="url(#hand-skin-edge)">
+      <g class="hand"${handTransform} filter="url(#hand-skin-edge)">
         ${fingerShapes}
         <path class="palm" d="${layout.palmPath}" />
       </g>
-      <g class="hand-detail">
+      <g class="hand-detail"${handTransform}>
         ${fingerDetails}
       </g>
       ${badges}

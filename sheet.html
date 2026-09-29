@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f2eadb" />
+    <title>MusicHands — Sheet Music</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.9.9/build/opensheetmusicdisplay.min.js"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main class="app-shell sheet-shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow"><a class="crumb" href="./index.html">MusicHands</a> / sheet music</p>
+          <h1 id="score-title">Loading the score…</h1>
+        </div>
+        <p class="lede">
+          The score is drawn from MusicXML. Step through it and watch both
+          hands move across the keyboard, each finger landing on its key.
+        </p>
+      </header>
+
+      <section class="sheet-toolbar" aria-label="Score controls">
+        <label class="field field--inline">
+          <span>Score</span>
+          <select id="score-select">
+            <option value="./scores/roundball-rock.musicxml">Roundball Rock</option>
+            <option value="./scores/minor-descent.musicxml">Minor Descent</option>
+            <option value="./scores/minor-descent-alt.musicxml">Minor Descent (alt reading)</option>
+          </select>
+        </label>
+        <label class="button file-button">
+          Open MusicXML…
+          <input id="score-file" type="file" accept=".xml,.musicxml,.mxl" hidden />
+        </label>
+        <div class="stepper" role="group" aria-label="Step through the score">
+          <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>
+          <button class="button" type="button" id="step-prev" title="Previous (←)">←</button>
+          <button class="button button--primary" type="button" id="step-next" title="Next (→)">Next →</button>
+        </div>
+        <p class="live-status" id="sheet-status" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="sheet-status-text">Reading the score</span>
+        </p>
+      </section>
+
+      <section class="score-panel" aria-label="Sheet music">
+        <div class="staff-legend-bar">
+          <label class="field field--inline guides-toggle">
+            <input id="guides-toggle" type="checkbox" checked />
+            <span>Colour the lines</span>
+          </label>
+          <div id="staff-legend" class="staff-legend" aria-label="Line colours by note name"></div>
+          <span class="staff-legend-hint">Faint lines mark the first two ledger lines under each staff: C and A below the treble, E and C below the bass.</span>
+        </div>
+        <div id="score-container" class="score-container"></div>
+      </section>
+
+      <section class="hands-panel" aria-label="Current hand positions">
+        <div class="workbench-bar">
+          <div>
+            <p class="position-kicker" id="hands-kicker">Measure 1 · beat 1</p>
+            <h2 id="hands-title">Both hands</h2>
+          </div>
+          <p class="fingering-note" id="fingering-note"></p>
+        </div>
+        <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
+        <div class="hands-captions">
+          <p id="left-hand-caption" class="hand-caption" data-hand="left">Left hand</p>
+          <p id="right-hand-caption" class="hand-caption" data-hand="right">Right hand</p>
+        </div>
+      </section>
+
+      <section class="positions-panel" aria-label="Every hand position in the piece">
+        <div class="section-heading">
+          <span class="step-number">RH</span>
+          <h2>Right-hand positions</h2>
+        </div>
+        <ol id="right-positions" class="position-list"></ol>
+        <div class="section-heading">
+          <span class="step-number">LH</span>
+          <h2>Left-hand positions</h2>
+        </div>
+        <ol id="left-positions" class="position-list"></ol>
+      </section>
+
+      <footer class="footer-note">
+        <span>Use ← and → to move through the piece. Click any position card to jump there.</span>
+        <span>Fingering: score marks first, then <code>scores/*.fingering.json</code>, then a guess.</span>
+      </footer>
+    </main>
+    <script type="module" src="./sheet.js"></script>
+  </body>
+</html>

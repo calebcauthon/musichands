@@ -51,21 +51,35 @@ export function noteOptions(minMidi = 36, maxMidi = 84) {
   return notes;
 }
 
-export function getKeyboardWindow(fingers, minimumWhiteKeys = 12) {
+// White keys to show around the assigned notes. The palm and any idle fingers
+// spread out on the thumb side of the lowest assigned finger (for a right hand)
+// or the highest one (for a left hand), so that side gets more room when the
+// thumb itself is not placed.
+export function getKeyboardWindow(fingers, minimumWhiteKeys = 12, hand = "right") {
   const midis = fingers.map((finger) => noteToMidi(finger.note));
   const low = Math.min(...midis);
   const high = Math.max(...midis);
+  const lowFinger = fingers.find((finger) => noteToMidi(finger.note) === low)?.finger ?? 1;
+  const highFinger = fingers.find((finger) => noteToMidi(finger.note) === high)?.finger ?? 1;
+  const palmKeys = (finger) => Math.round((finger - 1) * 1.3);
+  const lowMargin = 2 + (hand === "right" ? palmKeys(lowFinger) : 0);
+  const highMargin = 3 + (hand === "left" ? palmKeys(highFinger) : 0);
 
   let start = low;
   while (isBlackNote(midiToNote(start))) start -= 1;
-  for (let count = 0; count < 2; start -= 1) {
+  for (let count = 0; count < lowMargin; start -= 1) {
     if (!isBlackNote(midiToNote(start))) count += 1;
   }
   start += 1;
 
+  let end = high;
+  for (let count = 0; count < highMargin; end += 1) {
+    if (!isBlackNote(midiToNote(end))) count += 1;
+  }
+
   const whiteNotes = [];
   let midi = start;
-  while (whiteNotes.length < minimumWhiteKeys || midi <= high + 3) {
+  while (whiteNotes.length < minimumWhiteKeys || midi < end) {
     const note = midiToNote(midi);
     if (!isBlackNote(note)) whiteNotes.push({ note, midi });
     midi += 1;
