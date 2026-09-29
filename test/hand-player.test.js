@@ -17,6 +17,14 @@ test("playing one by one goes up from the lowest note, one at a time", () => {
   assert.deepEqual(planNotes([], "succession"), []);
 });
 
+test("there and back goes up, turns on the top note, and comes back down", () => {
+  const plan = planNotes([60, 62, 64, 65, 67], "roundtrip");
+  assert.deepEqual(plan.map((step) => step.midis[0]), [60, 62, 64, 65, 67, 65, 64, 62, 60]);
+  plan.forEach((step, index) => assert.equal(step.at, index * plan[1].at, "notes are evenly spaced"));
+  assert.deepEqual(planNotes([60], "roundtrip").map((step) => step.midis[0]), [60]);
+  assert.deepEqual(planNotes([64, 60], "roundtrip").map((step) => step.midis[0]), [60, 64, 60]);
+});
+
 test("the player presses fingers and sounds each note when its key lands", (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });
   const log = [];

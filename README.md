@@ -14,7 +14,7 @@ Then open the address it prints, normally <http://localhost:4173>. If that port 
 
 - Assigns one piano note to each finger and poses the hand so every fingertip rests on its key.
 - Draws both hands on one keyboard, seen from above the player, and animates each move and key strike.
-- Plays a sampled grand piano: click any key, step through a score, or use the play buttons to hear a position all together or one finger at a time, with the fingers striking in time with the sound.
+- Plays a sampled grand piano: click any key, step through a score, or use the play buttons to hear a position all together, one finger at a time, or up through the fingers and back down, with the fingers striking in time with the sound.
 - Responds to pointer, computer-keyboard, and Web MIDI input.
 - Downloads the current picture as a PNG.
 

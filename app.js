@@ -61,6 +61,7 @@ const soundToggle = document.querySelector("#sound-toggle");
 const playButtons = {
   together: document.querySelector("#play-together"),
   succession: document.querySelector("#play-succession"),
+  roundtrip: document.querySelector("#play-roundtrip"),
 };
 
 function renderFingerControls() {
@@ -93,6 +94,12 @@ function showHand({ immediate = false, strike = false } = {}) {
   return visual.setHands({ [state.hand]: hand }, { immediate });
 }
 
+const PLAYING = {
+  together: "Playing all five together",
+  succession: "Playing one finger at a time",
+  roundtrip: "Playing up and back down",
+};
+
 const player = new HandPlayer({
   audio,
   press: (midis) => {
@@ -105,7 +112,7 @@ const player = new HandPlayer({
   },
   onChange: (mode) => {
     for (const [name, button] of Object.entries(playButtons)) button.classList.toggle("is-playing", name === mode);
-    if (mode) setStatus(mode === "together" ? "Playing all five together" : "Playing one finger at a time", "correct");
+    if (mode) setStatus(PLAYING[mode], "correct");
     else if (state.activeMidis.size === 0) setStatus("Ready to play");
   },
 });
@@ -246,8 +253,7 @@ async function connectMidi() {
 }
 
 midiButton.addEventListener("click", connectMidi);
-playButtons.together.addEventListener("click", () => replay("together"));
-playButtons.succession.addEventListener("click", () => replay("succession"));
+for (const [mode, button] of Object.entries(playButtons)) button.addEventListener("click", () => replay(mode));
 
 soundToggle.checked = audio.enabled;
 soundToggle.addEventListener("change", () => {

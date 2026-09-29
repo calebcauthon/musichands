@@ -1,17 +1,19 @@
 // Plays a set of notes through the hand and the piano together: all at once,
-// or one finger after another.
+// one finger after another, or up through the fingers and back down again.
 
-export const PLAY_MODES = ["together", "succession"];
+export const PLAY_MODES = ["together", "succession", "roundtrip"];
 const STEP = 520; // ms between fingers when playing one by one
-const RING = { together: 1500, succession: 620 }; // ms each note sounds
-const HOLD = { together: 1300, succession: 700 }; // ms the last keys stay down
+const RING = { together: 1500, single: 620 }; // ms each note sounds
+const HOLD = { together: 1300, single: 700 }; // ms the last keys stay down
 
 // When each group of notes goes down, in milliseconds from the start.
 export function planNotes(midis, mode) {
   const notes = [...new Set([...midis].map(Number))].sort((a, b) => a - b);
   if (!notes.length) return [];
   if (mode === "together") return [{ at: 0, midis: notes, ring: RING.together, hold: HOLD.together }];
-  return notes.map((midi, index) => ({ at: index * STEP, midis: [midi], ring: RING.succession, hold: index === notes.length - 1 ? HOLD.succession : STEP }));
+  // There and back turns around on the top note without playing it twice.
+  const order = mode === "roundtrip" ? [...notes, ...notes.slice(0, -1).reverse()] : notes;
+  return order.map((midi, index) => ({ at: index * STEP, midis: [midi], ring: RING.single, hold: index === order.length - 1 ? HOLD.single : STEP }));
 }
 
 export class HandPlayer {

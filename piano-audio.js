@@ -25,6 +25,7 @@ export function nearestSample(midi) {
 }
 
 const RELEASE = 0.11; // seconds for a damped string to fall to about a third
+const TOO_LATE = 400; // ms after which a note that could not start on time is dropped
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 
 export class PianoAudio {
@@ -36,6 +37,7 @@ export class PianoAudio {
     this.files = new Map(); // sample name → promise of its bytes
     this.buffers = new Map(); // sample name → promise of its decoded audio, or null if it failed
     this.voices = new Set();
+    this.started = null; // settles once a live audio clock is running
     if (context) {
       this.attach(context);
     } else if (typeof window !== "undefined") {
@@ -86,10 +88,27 @@ export class PianoAudio {
       const Context = window.AudioContext ?? window.webkitAudioContext;
       if (!Context) return null;
       this.attach(new Context({ latencyHint: "interactive" }));
+      this.started = this.clockRunning();
+    } else if (this.started && this.context.state !== "running" && !this.starting) {
+      this.started = this.clockRunning();
     }
-    if (this.context.state === "suspended") this.context.resume?.();
     for (const sample of SAMPLES) this.decode(sample.name);
     return this.context;
+  }
+
+  // Resolves once the audio clock is actually advancing, which can lag well
+  // behind creating the context the first time sound is used.
+  async clockRunning() {
+    this.starting = true;
+    try {
+      await this.context.resume?.();
+    } catch {
+      // Not allowed yet; the next gesture will try again.
+    }
+    for (let tries = 0; tries < 300 && this.context.currentTime === 0; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    this.starting = false;
   }
 
   decode(name) {
@@ -119,12 +138,29 @@ export class PianoAudio {
     const context = this.wake();
     if (!context) return;
     const requested = context.currentTime + delay / 1000;
+    const asked = this.started ? performance.now() : null;
     const sample = nearestSample(midi);
     const voice = { midi, startAt: requested, stopAt: duration === null ? null : requested + duration / 1000, cancelled: false, nodes: null };
     this.voices.add(voice);
-    this.decode(sample.name).then((buffer) => {
+    Promise.all([this.decode(sample.name), this.started]).then(([buffer]) => {
       if (voice.cancelled) return;
-      // If decoding took a moment, start as soon as possible rather than in the past.
+      if (asked !== null) {
+        // The audio clock may not have been running when this was asked for, so
+        // place the note by the wall clock: notes keep their spacing, and one
+        // that has missed its moment by too much is dropped instead of piling
+        // up with the notes after it.
+        const waited = performance.now() - asked;
+        if (waited - delay > TOO_LATE) {
+          this.voices.delete(voice);
+          return;
+        }
+        const shift = context.currentTime + Math.max(0, delay - waited) / 1000 - voice.startAt;
+        if (Math.abs(shift) > 0.02) {
+          voice.startAt += shift;
+          if (voice.stopAt !== null) voice.stopAt += shift;
+        }
+      }
+      // If loading took a moment, start as soon as possible rather than in the past.
       const when = Math.max(voice.startAt, context.currentTime);
       const level = 0.25 + 0.75 * clamp(velocity, 0, 1) ** 1.6;
       // A key struck again takes over from its own earlier sound.

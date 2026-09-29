@@ -22,6 +22,7 @@ const soundToggle = document.querySelector("#sound-toggle");
 const playButtons = {
   together: document.querySelector("#play-together"),
   succession: document.querySelector("#play-succession"),
+  roundtrip: document.querySelector("#play-roundtrip"),
 };
 const TEMPO = 120; // quarter notes a minute, until the score's own tempo is read
 const captions = {
@@ -490,8 +491,7 @@ function replay(mode) {
   player.play(notes, mode);
 }
 
-playButtons.together.addEventListener("click", () => replay("together"));
-playButtons.succession.addEventListener("click", () => replay("succession"));
+for (const [mode, button] of Object.entries(playButtons)) button.addEventListener("click", () => replay(mode));
 
 soundToggle.checked = audio.enabled;
 soundToggle.addEventListener("change", () => {
