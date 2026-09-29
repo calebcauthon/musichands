@@ -71,6 +71,12 @@ What it does not read: scanned pages (they hold only a picture), PDFs set in old
 
 A measure whose notes do not add up to the time signature is named in the status line, so a misreading shows instead of passing silently.
 
+## Deploying
+
+The app is only files, so any host that can serve them will do. `npm start` runs `server.js`, a small server with no dependencies that listens on `$PORT` and serves nothing but the app's own files.
+
+It runs on [Railway](https://railway.com/) at <https://musichands-production.up.railway.app>. To put out a new version, run `railway up --service musichands` from this folder.
+
 ## Tests
 
 ```bash
