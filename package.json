@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "python3 serve.py 4173",
+    "start": "node server.js",
     "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
