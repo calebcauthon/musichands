@@ -693,7 +693,7 @@ export class HandStage {
     return (480 + KEY_LAG + KEY_FALL) / this.options.speed;
   }
 
-  // specs: { left, right }, each { fingers: [{ finger, note }], activeMidis: [], strike: bool },
+  // specs: { left, right }, each { fingers: [{ finger, note }], activeMidis: [], strike: bool, strikeMidis: [] },
   // or null to withdraw that hand. Returns how many milliseconds from now the
   // struck keys will land, so sound can be timed to the fingers. With `landIn`
   // the strike is timed to land that many milliseconds from now: the hands
@@ -702,7 +702,15 @@ export class HandStage {
     if (this.stillOnly) immediate = true;
     for (const side of SIDES) {
       const spec = specs[side];
-      this.requests[side] = spec ? { fingers: spec.fingers.map((entry) => ({ ...entry })), activeMidis: [...(spec.activeMidis ?? [])].map(Number), strike: Boolean(spec.strike) } : null;
+      this.requests[side] = spec
+        ? {
+            fingers: spec.fingers.map((entry) => ({ ...entry })),
+            activeMidis: [...(spec.activeMidis ?? [])].map(Number),
+            strike: Boolean(spec.strike),
+            // Which of the active notes are struck; the rest are held over. All of them, unless told.
+            strikeMidis: spec.strikeMidis ? [...spec.strikeMidis].map(Number) : null,
+          }
+        : null;
     }
     this.refreshKeys(immediate);
     const plans = [];
@@ -796,10 +804,12 @@ export class HandStage {
     const active = new Set(request.activeMidis);
     const pressedStates = {};
     const liftedStates = {};
+    // Fingers that strike lift first; fingers holding a note over stay down.
+    const struck = request.strikeMidis ? new Set(request.strikeMidis) : active;
     for (const [finger, midi] of midiOf) {
       if (!active.has(midi)) continue;
       pressedStates[finger] = "pressed";
-      liftedStates[finger] = "lifted";
+      liftedStates[finger] = struck.has(midi) ? "lifted" : "pressed";
     }
     const pressed = this.solve(side, request, pressedStates);
     // Frame the whole hand where it will come to rest, not just the keys it plays.
@@ -812,8 +822,8 @@ export class HandStage {
     actor.key = key;
     actor.root.visible = true;
 
-    const strikes = request.strike && Object.keys(liftedStates).length > 0;
-    const struckKeys = actor.targets.filter((target) => liftedStates[target.finger]).map((target) => target.midi);
+    const strikes = request.strike && Object.values(liftedStates).includes("lifted");
+    const struckKeys = actor.targets.filter((target) => liftedStates[target.finger] === "lifted").map((target) => target.midi);
     if (immediate) {
       actor.segments = [];
       actor.apply({ pose: pressed.pose.slice(), scale: pressed.scale });

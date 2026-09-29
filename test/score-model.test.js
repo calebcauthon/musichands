@@ -210,3 +210,39 @@ function crc32(bytes) {
   }
   return (crc ^ -1) >>> 0;
 }
+
+test("a tied note is held, not played again, and rings through the tie", () => {
+  const score = parseScore(FIXTURE);
+  const right = score.events.filter((event) => event.hand === "right");
+  const first = right.find((event) => event.notes.some((note) => note.note === "G4" && note.tied));
+  const second = right.find((event) => event.notes.some((note) => note.note === "G4" && note.held));
+  assert.ok(first && second);
+  assert.equal(first.attack, true);
+  assert.equal(second.attack, false, "the note on the far side of a tie is not a new attack");
+  const tied = first.notes.find((note) => note.note === "G4");
+  assert.equal(tied.duration, 1);
+  assert.equal(tied.sustain, 4, "one beat in its own measure, then three more across the tie");
+  // A note with no tie rings only for its own length.
+  const plain = right[0].notes[0];
+  assert.equal(plain.sustain, plain.duration);
+});
+
+test("a chain of ties adds up, and a chord can tie some notes and strike others", () => {
+  const note = (step, octave, duration, tie = "") =>
+    `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${duration}</duration><staff>1</staff>${tie}</note>`;
+  const chord = (step, octave, duration, tie = "") => note(step, octave, duration, tie).replace("<note>", "<note><chord/>");
+  const start = '<tie type="start"/>';
+  const stop = '<tie type="stop"/>';
+  const xml = `<score-partwise><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1">
+    <measure number="1"><attributes><divisions>1</divisions><time><beats>2</beats><beat-type>4</beat-type></time></attributes>
+      ${note("C", 4, 2, start)}</measure>
+    <measure number="2">${note("C", 4, 2, stop + start)}${chord("E", 4, 2)}</measure>
+    <measure number="3">${note("C", 4, 1, stop)}${note("C", 4, 1)}</measure>
+  </part></score-partwise>`;
+  const events = parseScore(xml).events;
+  assert.deepEqual(events.map((event) => [event.time, event.attack]), [[0, true], [2, true], [4, false], [5, true]]);
+  assert.equal(events[0].notes[0].sustain, 5, "two beats, two more, then one");
+  const second = events[1].notes;
+  assert.deepEqual(second.map((entry) => [entry.note, entry.held]), [["C4", true], ["E4", false]]);
+  assert.equal(events[3].notes[0].held, false, "the same pitch played again after the tie ends is a new note");
+});

@@ -118,16 +118,19 @@ function eventAt(hand, time) {
   return found;
 }
 
-// What each hand is doing at a step: where it sits, which notes it holds, and
-// which of those it strikes at that very moment.
+// What each hand is doing at a step: where it sits, which notes it holds
+// down, and which of those it strikes at that very moment. A note tied over
+// from before is held down but not struck.
 function momentAt(step) {
   const moment = {};
   ["right", "left"].forEach((hand) => {
     const position = positionAt(hand, step.time);
     const event = eventAt(hand, step.time);
     if (!position) return;
-    const sounding = event && event.time + event.duration > step.time ? event.notes.map((note) => note.midi) : [];
-    moment[hand] = { position, event, sounding, striking: event?.time === step.time };
+    const current = event && event.time + event.duration > step.time;
+    const sounding = current ? event.notes.map((note) => note.midi) : [];
+    const struck = current && event.time === step.time ? event.notes.filter((note) => !note.held) : [];
+    moment[hand] = { position, event, sounding, struck, striking: struck.length > 0 };
   });
   return moment;
 }
@@ -141,12 +144,18 @@ function showHands({ jump = false, strike = true, landIn = null } = {}) {
   const moment = momentAt(step);
   const hands = { left: null, right: null };
   const underFinger = new Set();
-  for (const [hand, { position, sounding, striking }] of Object.entries(moment)) {
+  for (const [hand, { position, sounding, struck, striking }] of Object.entries(moment)) {
     const assigned = new Set(position.fingers.map((entry) => noteToMidi(entry.note)));
     assigned.forEach((midi) => underFinger.add(midi));
     const held = state.replay ? [...state.replay] : sounding;
     const active = [...new Set([...held, ...state.clicked])].filter((midi) => assigned.has(midi));
-    hands[hand] = { fingers: position.fingers, activeMidis: active, strike: strike && (state.replay ? active.length > 0 : striking) };
+    hands[hand] = {
+      fingers: position.fingers,
+      activeMidis: active,
+      strike: strike && (state.replay ? active.length > 0 : striking),
+      // Replaying a moment strikes everything in it; the score strikes only what is not tied over.
+      strikeMidis: state.replay ? null : struck.map((note) => note.midi),
+    };
   }
   handsView.setSounding([...state.clicked, ...(state.replay ?? [])].filter((midi) => !underFinger.has(midi)));
   return handsView.setHands(hands, { immediate: jump, landIn });
@@ -182,14 +191,17 @@ function renderHands({ jump = false, sound = false, landIn = null } = {}) {
   if (sound) {
     // Notes still held from before keep ringing; everything else is damped.
     // While the score plays, each note ends on its own and is left to.
-    const held = Object.values(moment).flatMap((entry) => (entry.striking ? [] : entry.sounding));
+    const struck = new Set(Object.values(moment).flatMap((entry) => entry.struck.map((note) => note.midi)));
+    const held = Object.values(moment).flatMap((entry) => entry.sounding.filter((midi) => !struck.has(midi)));
     if (!playing) audio.releaseAll({ except: held });
     for (const entry of Object.values(moment)) {
-      if (!entry.striking) continue;
-      const written = (entry.event.duration * 60000) / state.tempo;
-      // Stepping by hand is slower than the music, so let short notes ring long enough to hear.
-      const duration = playing ? Math.max(140, written) : Math.min(4000, Math.max(1200, written));
-      for (const midi of entry.sounding) audio.noteOn(midi, { delay: playing ? landIn : landing, duration });
+      for (const note of entry.struck) {
+        // A note rings through everything it is tied into.
+        const written = (note.sustain * 60000) / state.tempo;
+        // Stepping by hand is slower than the music, so let short notes ring long enough to hear.
+        const duration = playing ? Math.max(140, written) : Math.min(6000, Math.max(1200, written));
+        audio.noteOn(note.midi, { delay: playing ? landIn : landing, duration });
+      }
     }
   }
   const playable = Object.values(moment).some((entry) => entry.sounding.length);
@@ -606,7 +618,7 @@ const transport = new ScoreTransport({
     renderHands({ sound: true, landIn });
     moveCursorTo(state.steps[index].time);
   },
-  tail: (index) => Math.max(...state.steps[index].events.map((event) => (event.duration * 60000) / state.tempo)),
+  tail: (index) => Math.max(...state.steps[index].events.flatMap((event) => event.notes.map((note) => (note.sustain * 60000) / state.tempo))),
   done: () => showPlaying(false),
 });
 

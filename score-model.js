@@ -110,7 +110,14 @@ function readPart(partNode) {
       if (!ties.includes("stop")) event.attack = true;
       event.duration = Math.max(event.duration, duration / divisions);
       if (!event.notes.some((entry) => entry.midi === noteToMidi(note))) {
-        event.notes.push({ note, midi: noteToMidi(note), finger: scoreFingering(node), held: ties.includes("stop") });
+        event.notes.push({
+          note,
+          midi: noteToMidi(note),
+          finger: scoreFingering(node),
+          held: ties.includes("stop"), // continues a note already sounding, so it is not played again
+          tied: ties.includes("start"), // carries on into the next note of the same pitch
+          duration: duration / divisions,
+        });
       }
     });
 
@@ -124,11 +131,37 @@ function readPart(partNode) {
 
   const sortEvents = (list) => list.sort((a, b) => a.time - b.time || (a.hand === "right" ? -1 : 1));
   sortEvents(events);
+  sustainTies(events);
   measures.forEach((measure) => {
     sortEvents(measure.events);
     measure.events.forEach((event) => event.notes.sort((a, b) => a.midi - b.midi));
   });
   return { measures, events };
+}
+
+// A tied note sounds for its own length and that of every note it is tied
+// into, so give each note the whole time it rings.
+function sustainTies(events) {
+  for (const hand of ["right", "left"]) {
+    const own = events.filter((event) => event.hand === hand);
+    own.forEach((event, index) => {
+      for (const note of event.notes) {
+        note.sustain = note.duration;
+        let end = event.time + note.duration;
+        let link = note;
+        for (let next = index + 1; link.tied && next < own.length; next += 1) {
+          const later = own[next];
+          if (later.time > end + 1e-6) break;
+          if (Math.abs(later.time - end) > 1e-6) continue;
+          const continued = later.notes.find((entry) => entry.midi === note.midi && entry.held);
+          if (!continued) break;
+          note.sustain += continued.duration;
+          end += continued.duration;
+          link = continued;
+        }
+      }
+    });
+  }
 }
 
 // The first tempo the score states, in quarter notes a minute.

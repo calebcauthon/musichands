@@ -163,9 +163,13 @@ export class PianoAudio {
       // If loading took a moment, start as soon as possible rather than in the past.
       const when = Math.max(voice.startAt, context.currentTime);
       const level = 0.25 + 0.75 * clamp(velocity, 0, 1) ** 1.6;
-      // A key struck again takes over from its own earlier sound.
+      // A key struck again takes over from its own earlier sound, and rings at
+      // least as long as that sound was going to: the key is still held down.
       for (const other of this.voices) {
-        if (other !== voice && other.midi === midi && other.nodes && other.startAt <= when) this.release(other, when, 0.03);
+        if (other === voice || other.midi !== midi || !other.nodes || other.startAt > when) continue;
+        const end = other.released ?? other.stopAt;
+        if (voice.stopAt !== null && end !== null && end !== undefined) voice.stopAt = Math.max(voice.stopAt, end);
+        this.release(other, when, 0.03);
       }
       voice.startAt = when;
       voice.level = level;

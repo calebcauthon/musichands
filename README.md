@@ -46,6 +46,8 @@ Open `/sheet.html` on the same server to see a whole piece with hand positions.
 
 **Play** runs the piece from where you are, at the tempo on the slider, with both hands landing on the beat; P does the same. The tempo starts at the score's own. **Reflexes** sets how quickly the hands move and strike, so stepping by hand can keep up with a fast piece. While playing, the hands always keep time: if the tempo leaves less room than the reflexes want, they hurry. `score-transport.js` does the timing.
 
+A note tied over from before is held, not played again: its finger stays down, its key stays down, and the sound that started the tie rings through it. Only the notes that are not tied over are struck.
+
 Step through the piece with the arrow keys or the Next button, click a measure in the score, or click a position card to jump. Each step sounds the notes struck at that moment. Space replays the moment together, Shift + Space one note at a time, and the Sound switch turns it all off.
 
 Scores live in `scores/`. The bundled `roundball-rock.musicxml` came from a MuseScore export and carries no fingerings, so nearly every position there is a guess until the sidecar file fills them in.
