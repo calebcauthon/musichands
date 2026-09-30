@@ -874,7 +874,10 @@ export class HandStage {
   // Solve every pose a score will need while the player is still reading the
   // page. Doing inverse kinematics on the note's deadline causes audible and
   // visible stalls in dense passages, even when rendering itself is cheap.
-  prepareHands(specs) {
+  // Ordinarily the work goes in idle moments so the page stays quick under
+  // the pointer; when it is `urgent` (Play is pressed and everyone is waiting
+  // on it) it runs in long stretches with only a breath between them.
+  prepareHands(specs, { urgent = false } = {}) {
     const generation = (this.prepareGeneration ?? 0) + 1;
     this.prepareGeneration = generation;
     this.prepared.clear();
@@ -903,6 +906,7 @@ export class HandStage {
         }
       }
     }
+    const stretch = urgent ? 40 : 8; // ms of solving before yielding
     return new Promise((resolve) => {
       const run = (deadline) => {
         if (generation !== this.prepareGeneration) return resolve(false);
@@ -910,12 +914,12 @@ export class HandStage {
         // still make progress; after that, yield before interaction suffers.
         let worked = false;
         const started = performance.now();
-        while (jobs.length && (!worked || (performance.now() - started < 6 && deadline?.timeRemaining?.() > 2))) {
+        while (jobs.length && (!worked || (performance.now() - started < stretch && (urgent || deadline?.timeRemaining?.() > 2)))) {
           jobs.shift()();
           worked = true;
         }
         if (!jobs.length) return resolve(true);
-        if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 100 });
+        if (!urgent && window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 100 });
         else window.setTimeout(() => run(null), 0);
       };
       run({ timeRemaining: () => 0 });

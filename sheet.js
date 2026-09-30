@@ -1031,7 +1031,7 @@ async function startTransport() {
   const client = ws;
   const steps = page.steps;
   const serial = ++preparationSerial;
-  const preparation = Promise.all([handsView.prepareHands(scoreHandSpecs()), audio.prepare()]);
+  const preparation = Promise.all([handsView.prepareHands(scoreHandSpecs(), { urgent: true }), audio.prepare()]);
   preparingTransport = preparation;
   let prepared;
   try {

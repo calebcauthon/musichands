@@ -16,8 +16,9 @@ class StageView {
     return this.stage.setHands(hands, { immediate, landIn });
   }
 
-  prepareHands(specs) {
-    return this.stage.prepareHands(specs);
+  // `urgent` when someone is waiting on it, as after pressing Play.
+  prepareHands(specs, options) {
+    return this.stage.prepareHands(specs, options);
   }
 
   // How many times faster than usual the hands move.
