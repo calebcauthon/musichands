@@ -4,8 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f2eadb" />
-    <title>MusicHands — Hand Position Studio</title>
+    <title>MusicHands — Sheet Music</title>
     <link rel="stylesheet" href="./styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.9.9/build/opensheetmusicdisplay.min.js"></script>
     <script type="importmap">
       {
         "imports": {
@@ -16,122 +17,134 @@
     </script>
   </head>
   <body>
-    <main class="app-shell">
+    <main class="app-shell sheet-shell">
       <header class="masthead">
         <div>
-          <p class="eyebrow">MusicHands / visual study</p>
-          <h1>Put the hand<br />on the music.</h1>
+          <p class="eyebrow">MusicHands / sheet music · <a class="crumb" href="./studio.html">Hand position studio</a></p>
+          <h1 id="score-title">Loading the score…</h1>
         </div>
         <p class="lede">
-          Shape a piano hand position, then play it. The hand responds to
-          clicks, your computer keyboard, or a connected MIDI piano.
+          Bring in a score as a PDF or MusicXML file, step through it, and watch
+          both hands move across the keyboard, each finger landing on its key.
         </p>
       </header>
 
-      <section class="studio" aria-label="Hand position editor">
-        <aside class="controls">
-          <div class="control-section control-section--first">
-            <div class="section-heading">
-              <span class="step-number">01</span>
-              <h2>Choose a position</h2>
-            </div>
+      <section class="sheet-toolbar" aria-label="Score controls">
+        <label class="field field--inline">
+          <span>Score</span>
+          <select id="score-select">
+            <optgroup label="Your scores" id="imported-scores" hidden></optgroup>
+            <optgroup label="Included">
+              <option value="./scores/minor-descent.musicxml">Minor Descent</option>
+              <option value="./scores/minor-descent-alt.musicxml">Minor Descent (alt reading)</option>
+            </optgroup>
+          </select>
+        </label>
+        <label class="button file-button" title="Bring in a PDF, MusicXML or MXL file. You can also drop one anywhere on the page.">
+          Import a score…
+          <input id="score-file" type="file" accept=".pdf,.xml,.musicxml,.mxl" hidden />
+        </label>
+        <div class="library-actions" id="library-actions" hidden>
+          <button class="button" type="button" id="save-score" title="Save this score as a MusicXML file">Save MusicXML</button>
+          <button class="button" type="button" id="remove-score" title="Take this score out of your list">Remove</button>
+        </div>
+        <div class="stepper" role="group" aria-label="Step through the score">
+          <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>
+          <button class="button" type="button" id="step-prev" title="Previous (←)">←</button>
+          <button class="button button--primary" type="button" id="step-next" title="Next (→)">Next →</button>
+        </div>
+        <p class="live-status" id="sheet-status" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="sheet-status-text">Reading the score</span>
+        </p>
+      </section>
 
-            <div class="segmented" role="group" aria-label="Choose hand">
-              <button class="segment is-active" type="button" data-hand="right">Right hand</button>
-              <button class="segment" type="button" data-hand="left">Left hand</button>
-            </div>
+      <section class="score-panel" aria-label="Sheet music">
+        <div class="staff-legend-bar">
+          <label class="field field--inline guides-toggle">
+            <input id="guides-toggle" type="checkbox" checked />
+            <span>Colour the lines</span>
+          </label>
+          <div id="staff-legend" class="staff-legend" aria-label="Line colours by note name"></div>
+          <span class="staff-legend-hint">Faint lines mark the first two ledger lines under each staff: C and A below the treble, E and C below the bass.</span>
+        </div>
+        <div id="score-container" class="score-container"></div>
+      </section>
 
-            <label class="field">
-              <span>Starting shape</span>
-              <select id="preset-select">
-                <option value="c-position">C five-finger position</option>
-                <option value="c-chord">C major chord</option>
-                <option value="g-position">G five-finger position</option>
-                <option value="d-position">D five-finger position</option>
-                <option value="wide-chord">Wide seventh chord</option>
-              </select>
-            </label>
+      <section class="hands-panel" aria-label="Current hand positions">
+        <div class="workbench-bar">
+          <div>
+            <p class="position-kicker" id="hands-kicker">Measure 1 · beat 1</p>
+            <h2 id="hands-title">Both hands</h2>
           </div>
-
-          <div class="control-section">
-            <div class="section-heading">
-              <span class="step-number">02</span>
-              <h2>Place each finger</h2>
-            </div>
-            <div id="finger-controls" class="finger-controls"></div>
-          </div>
-
-          <details class="control-section fine-tune">
-            <summary>
-              <span class="step-number">03</span>
-              <span>Fine-tune the hand</span>
-              <span class="summary-mark" aria-hidden="true">+</span>
-            </summary>
-            <div class="fine-tune-body">
-              <label class="range-field">
-                <span>Palm height <output id="palm-height-output">44</output></span>
-                <input id="palm-height" type="range" min="28" max="68" value="44" />
-              </label>
-              <label class="range-field">
-                <span>Finger curve <output id="curve-output">52</output></span>
-                <input id="curve" type="range" min="12" max="88" value="52" />
-              </label>
-              <label class="range-field">
-                <span>Hand size <output id="weight-output">30</output></span>
-                <input id="weight" type="range" min="22" max="40" value="30" />
-              </label>
-              <label class="check-field">
-                <input id="show-notes" type="checkbox" checked />
-                <span>Show note names</span>
-              </label>
-              <label class="check-field">
+          <div class="play-controls">
+            <p class="fingering-note" id="fingering-note"></p>
+            <div class="play-buttons" role="group" aria-label="Hear this moment">
+              <button class="button" type="button" id="play-together" title="Play these notes together (Space)">Together</button>
+              <button class="button" type="button" id="play-succession" title="Play these notes one finger at a time (Shift + Space)">One by one</button>
+              <button class="button" type="button" id="play-roundtrip" title="Play these notes one finger at a time, up and back down">One by one &amp; back</button>
+              <label class="check-field sound-toggle" title="Turn all sound on or off">
                 <input id="sound-toggle" type="checkbox" checked />
                 <span>Sound</span>
               </label>
-              <label class="check-field">
-                <input id="show-guides" type="checkbox" checked />
-                <span>Show finger numbers</span>
+              <label class="check-field" title="Show the finger numbers over the keys (N)">
+                <input id="numbers-toggle" type="checkbox" checked />
+                <span>Finger numbers</span>
               </label>
             </div>
-          </details>
-        </aside>
-
-        <div class="workbench">
-          <div class="workbench-bar">
-            <div>
-              <p class="position-kicker" id="position-kicker">Right hand position</p>
-              <h2 id="position-title">Thumb on C4 · pinky on G4</h2>
-            </div>
-            <div class="live-status" id="live-status" data-state="idle">
-              <span class="status-dot"></span>
-              <span id="status-text">Ready to play</span>
-            </div>
           </div>
-
-          <div class="visual-stage" id="visual-stage" aria-live="polite"></div>
-
-          <div class="play-strip">
-            <div class="play-copy">
-              <span class="play-label">PLAY IT</span>
-              <p>Click the keys, use <kbd>A</kbd>–<kbd>K</kbd>, or connect a MIDI keyboard.</p>
+        </div>
+        <div class="transport" role="group" aria-label="Play the score">
+          <button class="button button--primary" type="button" id="play-score" title="Play the score from here (P)">▶ Play</button>
+          <label class="slider-field" title="How fast the music plays, in quarter notes a minute">
+            <span>Tempo</span>
+            <input id="tempo" type="range" min="30" max="240" step="1" value="120" />
+            <output id="tempo-output">120</output>
+          </label>
+          <label class="slider-field" title="How quickly the hands move and strike">
+            <span>Reflexes</span>
+            <input id="reflex" type="range" min="0.5" max="4" step="0.25" value="1" />
+            <output id="reflex-output">1×</output>
+          </label>
+        </div>
+        <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
+        <div class="hands-captions">
+          <div class="hand-strip" data-hand="left">
+            <div class="hand-toggles" role="group" aria-label="Left hand">
+              <label class="check-field" title="Draw the left hand"><input id="left-show" type="checkbox" checked /><span>Show</span></label>
+              <label class="check-field" title="Hear the left hand"><input id="left-sound" type="checkbox" checked /><span>Sound</span></label>
             </div>
-            <div class="actions">
-              <button class="button button--primary" id="play-together" type="button" title="Play all five notes together">Together</button>
-              <button class="button button--primary" id="play-succession" type="button" title="Play one finger at a time">One by one</button>
-              <button class="button button--primary" id="play-roundtrip" type="button" title="Play one finger at a time, up and back down">One by one &amp; back</button>
-              <button class="button" id="midi-button" type="button">Connect MIDI</button>
-              <button class="button" id="download-button" type="button">Download image</button>
+            <p id="left-hand-caption" class="hand-caption" data-hand="left">Left hand</p>
+          </div>
+          <div class="hand-strip" data-hand="right">
+            <p id="right-hand-caption" class="hand-caption" data-hand="right">Right hand</p>
+            <div class="hand-toggles" role="group" aria-label="Right hand">
+              <label class="check-field" title="Draw the right hand"><input id="right-show" type="checkbox" checked /><span>Show</span></label>
+              <label class="check-field" title="Hear the right hand"><input id="right-sound" type="checkbox" checked /><span>Sound</span></label>
             </div>
           </div>
         </div>
       </section>
 
-      <footer class="footer-note">
-        <span>Prototype 001 · <a class="crumb" href="./sheet.html">Open the sheet music view</a></span>
-        <p>The hand is posed entirely from the five note assignments above.</p>
-      </footer>
-    </main>
+      <section class="positions-panel" aria-label="Every hand position in the piece">
+        <div class="section-heading">
+          <span class="step-number">RH</span>
+          <h2>Right-hand positions</h2>
+        </div>
+        <ol id="right-positions" class="position-list"></ol>
+        <div class="section-heading">
+          <span class="step-number">LH</span>
+          <h2>Left-hand positions</h2>
+        </div>
+        <ol id="left-positions" class="position-list"></ol>
+      </section>
 
-    <script type="module" src="./app.js"></script>
+      <footer class="footer-note">
+        <span>Use ← and → to move through the piece, P to play it, Space to hear the moment again. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a position card to jump there.</span>
+        <span>Fingering: score marks first, then <code>scores/*.fingering.json</code>, then a guess. · <a class="crumb" href="./studio.html">Shape a single hand position in the studio</a></span>
+      </footer>
+      <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>
+    </main>
+    <script type="module" src="./sheet.js"></script>
   </body>
 </html>

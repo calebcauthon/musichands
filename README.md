@@ -10,6 +10,8 @@ npm run dev
 
 Then open the address it prints, normally <http://localhost:4173>. If that port is taken it uses the next free one. The pages use ES modules and fetch their assets, so they need a server; opening the HTML files directly will not work.
 
+The front page is the sheet music view. The hand position studio, for shaping a single hand position finger by finger, is at `/studio.html` and is linked from the front page.
+
 ## What it does
 
 - Assigns one piano note to each finger and poses the hand so every fingertip rests on its key.
@@ -36,7 +38,7 @@ The hand model is the generic hand from the [WebXR Input Profiles](https://githu
 
 ## Sheet music view
 
-Open `/sheet.html` on the same server to see a whole piece with hand positions.
+The front page shows a whole piece with hand positions. (`/sheet.html`, its old address, sends you there.)
 
 - `score-model.js` reads MusicXML (via the tiny reader in `xml.js`) into a timeline of hand moments: which notes each hand holds at each beat, split by staff.
 - `mxl.js` unpacks compressed `.mxl` files in the browser, so the "Open MusicXML…" button accepts either format.
