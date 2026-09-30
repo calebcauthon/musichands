@@ -12,7 +12,8 @@ function layer(into, from) {
   return out;
 }
 
-const REMEMBERED = "musichands-workspaces"; // the workspaces this browser has opened, newest first
+const HOME = "musichands-workspace"; // this browser's own workspace: { id, token }
+const REMEMBERED = "musichands-workspaces"; // the list kept when a browser could hold several, newest first
 const CLIENT = "musichands-client";
 
 const api = (base, path, token, options = {}) =>
@@ -23,7 +24,7 @@ const api = (base, path, token, options = {}) =>
 
 async function answer(response) {
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error ?? `${response.status} ${response.statusText}`);
+  if (!response.ok) throw Object.assign(new Error(body.error ?? `${response.status} ${response.statusText}`), { status: response.status });
   return body;
 }
 
@@ -58,33 +59,26 @@ export function parseConnection(text) {
   return id && token ? { id, token } : null;
 }
 
-export function rememberedWorkspaces() {
+// The workspace this browser calls its own, or null if it has none yet.
+export function homeWorkspace() {
   try {
-    const list = JSON.parse(localStorage.getItem(REMEMBERED) ?? "[]");
-    return Array.isArray(list) ? list.filter((entry) => entry && entry.id && entry.token) : [];
+    const home = JSON.parse(localStorage.getItem(HOME) ?? "null") ?? JSON.parse(localStorage.getItem(REMEMBERED) ?? "[]")[0];
+    return home?.id && home?.token ? { id: home.id, token: home.token } : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
-export function rememberWorkspace(entry) {
-  const list = [{ id: entry.id, token: entry.token, name: entry.name }, ...rememberedWorkspaces().filter((known) => known.id !== entry.id)].slice(0, 30);
+export function keepHomeWorkspace(entry) {
   try {
-    localStorage.setItem(REMEMBERED, JSON.stringify(list));
+    if (entry) localStorage.setItem(HOME, JSON.stringify({ id: entry.id, token: entry.token }));
+    else {
+      localStorage.removeItem(HOME);
+      localStorage.removeItem(REMEMBERED);
+    }
   } catch {
-    // Nothing to do: the address bar still has it.
+    // The workspace lasts only for this visit.
   }
-  return list;
-}
-
-export function forgetWorkspace(id) {
-  const list = rememberedWorkspaces().filter((known) => known.id !== id);
-  try {
-    localStorage.setItem(REMEMBERED, JSON.stringify(list));
-  } catch {
-    // As above.
-  }
-  return list;
 }
 
 export class WorkspaceClient extends EventTarget {
@@ -95,6 +89,7 @@ export class WorkspaceClient extends EventTarget {
     this.token = token;
     this.client = client;
     this.state = null;
+    this.scores = []; // the workspace's own scores: [{ id, title, measures, added }]
     this.name = "";
     this.version = 0;
     this.lead = false;
@@ -117,9 +112,10 @@ export class WorkspaceClient extends EventTarget {
     return this.info;
   }
 
-  take({ version, state, name, by }) {
+  take({ version, state, name, scores, by }) {
     if (version < this.version) return;
     this.version = version;
+    if (Array.isArray(scores)) this.scores = scores;
     // A change of ours still on its way stays on top of what the server sent.
     this.state = this.pending ? mergeState(state, this.pending) : state;
     if (typeof name === "string") this.name = name;
@@ -204,9 +200,23 @@ export class WorkspaceClient extends EventTarget {
     return api(this.base, this.path, this.token, { method: "DELETE" }).then(answer);
   }
 
-  // Sends a piece to the server; answers { id, title, measures }.
-  uploadScore(xml) {
-    return api(this.base, "/scores", null, { method: "POST", body: JSON.stringify({ xml }) }).then(answer);
+  // The MusicXML of one of the workspace's scores.
+  async readScore(id) {
+    const response = await api(this.base, `${this.path}/scores/${id}`, this.token);
+    if (!response.ok) throw new Error(response.status === 404 ? "it is not in this workspace" : `the server answered ${response.status}`);
+    return response.text();
+  }
+
+  // Adds a piece to the workspace's scores; answers { id, title, measures }.
+  async addScore(xml, title) {
+    const body = await answer(await api(this.base, `${this.path}/scores`, this.token, { method: "POST", headers: { "x-client": this.client }, body: JSON.stringify({ xml, title }) }));
+    this.scores = body.scores;
+    return body;
+  }
+
+  // Takes a score out of the workspace for good. The server moves on to another if it was open.
+  removeScore(id) {
+    return api(this.base, `${this.path}/scores/${id}`, this.token, { method: "DELETE", headers: { "x-client": this.client } }).then(answer);
   }
 
   static create(base, body = {}) {

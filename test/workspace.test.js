@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -93,7 +93,7 @@ async function withServer(run) {
   await new Promise((resolve) => server.listen(0, resolve));
   const base = `http://localhost:${server.address().port}`;
   try {
-    await run(base);
+    await run(base, dataDir);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     await rm(dataDir, { recursive: true, force: true });
@@ -139,15 +139,59 @@ test("workspaces are made, read, changed, copied and deleted, each behind its ow
   });
 });
 
-test("a score can be uploaded and put in a workspace", async () => {
-  await withServer(async (base) => {
-    const xml = `<score-partwise><work><work-title>Two Notes</work-title></work><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions><staves>2</staves></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><staff>1</staff></note><backup><duration>4</duration></backup><note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration><staff>2</staff></note></measure></part></score-partwise>`;
-    const uploaded = await (await fetch(`${base}/api/scores`, { method: "POST", headers: { "content-type": "application/vnd.recordare.musicxml+xml" }, body: xml })).json();
-    assert.match(uploaded.id, /^[0-9a-f]{64}$/);
-    assert.equal(uploaded.title, "Two Notes");
-    assert.equal((await fetch(`${base}/api/scores`, { method: "POST", body: "not music" })).status, 400);
-    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: JSON.stringify({ state: { score: { kind: "uploaded", id: uploaded.id, title: uploaded.title } } }) })).json();
+const TWO_NOTES = `<score-partwise><work><work-title>Two Notes</work-title></work><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions><staves>2</staves></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><staff>1</staff></note><backup><duration>4</duration></backup><note><pitch><step>C</step><octave>3</octave></pitch><duration>4</duration><staff>2</staff></note></measure></part></score-partwise>`;
+const MUSICXML = { "content-type": "application/vnd.recordare.musicxml+xml" };
+
+test("a new workspace starts with its own copy of the starter scores", async () => {
+  await withServer(async (base, dataDir) => {
+    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
     const auth = { authorization: `Bearer ${made.token}` };
+    assert.deepEqual(made.scores.map((entry) => entry.title), ["Minor Descent", "Minor Descent (alt fingering reading)"], "the scores the starter list names, in its order");
+    assert.deepEqual(made.state.score, { id: made.scores[0].id, title: "Minor Descent" }, "and the first of them is open");
+    assert.equal((await readdir(path.join(dataDir, "workspaces", made.id, "scores"))).length, 2, "the copies are the workspace's own files");
+    assert.match(await (await fetch(`${base}/api/workspaces/${made.id}/scores/${made.scores[1].id}`, { headers: auth })).text(), /alt fingering reading/);
+    assert.equal((await fetch(`${base}/api/workspaces/${made.id}/scores/${made.scores[1].id}`)).status, 401, "a score is behind its workspace's token");
+    assert.equal((await fetch(`${base}/scores/minor-descent.musicxml`)).status, 404, "and no score is served to everyone");
+
+    const other = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const removed = await (await fetch(`${base}/api/workspaces/${made.id}/scores/${made.scores[0].id}`, { method: "DELETE", headers: auth })).json();
+    assert.deepEqual(removed.scores.map((entry) => entry.title), ["Minor Descent (alt fingering reading)"]);
+    assert.equal(removed.state.score.id, made.scores[1].id, "removing the open score opens another");
+    const untouched = await (await fetch(`${base}/api/workspaces/${other.id}`, { headers: { authorization: `Bearer ${other.token}` } })).json();
+    assert.equal(untouched.scores.length, 2, "another workspace keeps its own copies");
+    assert.equal((await fetch(`${base}/api/workspaces/${other.id}/screen`, { headers: { authorization: `Bearer ${other.token}` } })).status, 200);
+
+    await fetch(`${base}/api/workspaces/${made.id}/scores/${made.scores[1].id}`, { method: "DELETE", headers: auth });
+    const empty = await (await fetch(`${base}/api/workspaces/${made.id}`, { headers: auth })).json();
+    assert.equal(empty.state.score, null, "a workspace can be left with no scores");
+    assert.equal((await fetch(`${base}/api/workspaces/${made.id}/screen`, { headers: auth })).status, 409);
+  });
+});
+
+test("a score added to a workspace belongs to that workspace alone", async () => {
+  await withServer(async (base) => {
+    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const auth = { authorization: `Bearer ${made.token}` };
+    const scores = `${base}/api/workspaces/${made.id}/scores`;
+    assert.equal((await fetch(scores, { method: "POST", headers: MUSICXML, body: TWO_NOTES })).status, 401);
+    const added = await (await fetch(scores, { method: "POST", headers: { ...auth, ...MUSICXML }, body: TWO_NOTES })).json();
+    assert.match(added.id, /^[0-9a-f]{64}$/);
+    assert.equal(added.title, "Two Notes");
+    assert.equal(added.scores.length, 3);
+    assert.equal((await fetch(scores, { method: "POST", headers: auth, body: "not music" })).status, 400);
+    const again = await (await fetch(scores, { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ xml: TWO_NOTES, title: "Two notes, renamed" }) })).json();
+    assert.equal(again.id, added.id);
+    assert.deepEqual(again.scores.map((entry) => entry.title).slice(2), ["Two notes, renamed"], "the same piece twice is one score");
+    assert.equal((await (await fetch(`${scores}/${added.id}/summary`, { headers: auth })).json()).measures, 1);
+
+    const other = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const otherAuth = { authorization: `Bearer ${other.token}` };
+    assert.equal((await fetch(`${base}/api/workspaces/${other.id}/scores/${added.id}`, { headers: otherAuth })).status, 404, "another workspace does not have it");
+    const refused = await (await fetch(`${base}/api/workspaces/${other.id}`, { method: "PATCH", headers: otherAuth, body: JSON.stringify({ score: { id: added.id } }) })).json();
+    assert.equal(refused.state.score.title, "Minor Descent", "and cannot open it");
+
+    const opened = await (await fetch(`${base}/api/workspaces/${made.id}`, { method: "PATCH", headers: auth, body: JSON.stringify({ score: { id: added.id } }) })).json();
+    assert.deepEqual(opened.state.score, { id: added.id, title: "Two notes, renamed" });
     const screen = await (await fetch(`${base}/api/workspaces/${made.id}/screen`, { headers: auth })).json();
     assert.equal(screen.score.title, "Two Notes");
     assert.deepEqual(screen.hands.right.notes.map((note) => note.note), ["C4"]);
@@ -156,8 +200,29 @@ test("a score can be uploaded and put in a workspace", async () => {
     const after = await (await fetch(`${base}/api/workspaces/${made.id}/screen`, { headers: auth })).json();
     assert.deepEqual(after.hands.right.notes, []);
     assert.deepEqual(after.hands.left.notes.map((note) => note.note), ["C3", "C4"]);
-    const text = await (await fetch(`${base}/api/workspaces/${made.id}/score`, { headers: auth })).text();
-    assert.match(text, /Two Notes/);
+    assert.match(await (await fetch(`${base}/api/workspaces/${made.id}/score`, { headers: auth })).text(), /Two Notes/);
+
+    const copy = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: JSON.stringify({ copyFrom: { id: made.id, token: made.token } }) })).json();
+    assert.equal(copy.state.score.id, added.id, "a copy takes the original's scores with it");
+    await fetch(`${base}/api/workspaces/${made.id}`, { method: "DELETE", headers: auth });
+    assert.match(await (await fetch(`${base}/api/workspaces/${copy.id}/score`, { headers: { authorization: `Bearer ${copy.token}` } })).text(), /Two Notes/, "and keeps them when the original is gone");
+  });
+});
+
+test("a workspace from before workspaces held their own scores keeps the piece it had open", async () => {
+  await withServer(async (base, dataDir) => {
+    const id = "f".repeat(64);
+    await mkdir(path.join(dataDir, "scores"), { recursive: true });
+    await mkdir(path.join(dataDir, "workspaces"), { recursive: true });
+    await writeFile(path.join(dataDir, "scores", `${id}.musicxml`), TWO_NOTES);
+    const old = { id: "ws-oldoldold1", name: "Before", token: "t".repeat(32), version: 4, state: { score: { kind: "uploaded", id, title: "My two notes" }, time: 2, corrections: { fingers: { "1:1": { right: { C4: 2 } } } } }, created: 1, updated: 1 };
+    await writeFile(path.join(dataDir, "workspaces", `${old.id}.json`), JSON.stringify(old));
+    const read = await (await fetch(`${base}/api/workspaces/${old.id}`, { headers: { authorization: `Bearer ${old.token}` } })).json();
+    assert.deepEqual(read.scores.map((entry) => entry.title), ["Minor Descent", "Minor Descent (alt fingering reading)", "My two notes"]);
+    assert.equal(read.state.score.title, "My two notes");
+    assert.equal(read.state.time, 2);
+    assert.deepEqual(read.state.corrections.fingers, { "1:1": { right: { C4: 2 } } });
+    assert.match(await (await fetch(`${base}/api/workspaces/${old.id}/score`, { headers: { authorization: `Bearer ${old.token}` } })).text(), /Two Notes/);
   });
 });
 

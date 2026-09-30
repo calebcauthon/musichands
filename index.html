@@ -30,39 +30,22 @@
       </header>
 
       <section class="workspace-bar" aria-label="Workspace">
-        <label class="field field--inline">
-          <span>Workspace</span>
-          <select id="workspace-select" title="Workspaces this browser has opened"></select>
-        </label>
-        <input id="workspace-name" class="workspace-name" type="text" maxlength="80" aria-label="Workspace name" title="Name this workspace" />
-        <div class="workspace-actions" role="group" aria-label="Workspaces">
-          <button class="button" type="button" id="workspace-new" title="Start a fresh workspace">New</button>
-          <button class="button" type="button" id="workspace-copy" title="Copy this workspace, corrections and all, to try something else">Duplicate</button>
-          <button class="button" type="button" id="workspace-open" title="Open a workspace from a link or connection string">Open…</button>
+        <div class="workspace-actions" role="group" aria-label="Workspace">
           <button class="button button--primary" type="button" id="workspace-connect" title="Copy everything an agent needs to see and change this screen">Copy agent connection string</button>
           <a class="crumb" href="./agent.md" target="_blank" rel="noopener">Agent manual</a>
+          <button class="button" type="button" id="workspace-home" title="Leave this shared workspace and go back to your own" hidden>Back to my workspace</button>
         </div>
         <p class="live-status workspace-status" id="workspace-status" data-state="idle">
           <span class="status-dot" aria-hidden="true"></span>
-          <span id="workspace-status-text">Opening the workspace</span>
+          <span id="workspace-status-text">Opening your workspace</span>
         </p>
-        <form class="workspace-open" id="workspace-open-form" hidden>
-          <textarea id="workspace-paste" rows="3" placeholder="Paste a workspace link or an agent connection string" aria-label="Workspace link or connection string"></textarea>
-          <button class="button button--primary" type="submit">Open workspace</button>
-          <button class="button" type="button" id="workspace-open-cancel">Cancel</button>
-        </form>
+        <textarea class="workspace-string" id="workspace-string" rows="5" readonly hidden aria-label="Agent connection string"></textarea>
       </section>
 
       <section class="sheet-toolbar" aria-label="Score controls">
         <label class="field field--inline">
           <span>Score</span>
-          <select id="score-select">
-            <optgroup label="Your uploads" id="imported-scores" hidden></optgroup>
-            <optgroup label="Included">
-              <option value="./scores/minor-descent.musicxml">Minor Descent</option>
-              <option value="./scores/minor-descent-alt.musicxml">Minor Descent (alt reading)</option>
-            </optgroup>
-          </select>
+          <select id="score-select" title="The scores in your workspace"></select>
         </label>
         <label class="button file-button" title="Bring in a PDF, MusicXML or MXL file. You can also drop one anywhere on the page.">
           Import a score…
@@ -70,7 +53,7 @@
         </label>
         <div class="library-actions" id="library-actions" hidden>
           <button class="button" type="button" id="save-score" title="Save this score as a MusicXML file">Save MusicXML</button>
-          <button class="button" type="button" id="remove-score" title="Take this score out of your list of uploads">Forget</button>
+          <button class="button" type="button" id="remove-score" title="Take this score out of your workspace">Remove</button>
         </div>
         <div class="stepper" role="group" aria-label="Step through the score">
           <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>

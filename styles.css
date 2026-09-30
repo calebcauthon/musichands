@@ -1457,20 +1457,6 @@ kbd {
   border-top: 1px solid var(--ink);
 }
 
-.workspace-bar select {
-  max-width: 14rem;
-}
-
-.workspace-name {
-  width: 13rem;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--rule);
-  background: color-mix(in oklch, var(--paper), white 28%);
-  font: inherit;
-  font-weight: 700;
-}
-
 .workspace-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1491,16 +1477,8 @@ kbd {
   background: var(--clay-deep);
 }
 
-.workspace-open {
-  display: grid;
+.workspace-string {
   flex-basis: 100%;
-  grid-template-columns: 1fr auto auto;
-  gap: var(--space-xs);
-  align-items: start;
-}
-
-.workspace-open textarea {
-  min-height: 3.5rem;
   padding: 8px 10px;
   border: 1px solid var(--rule);
   background: color-mix(in oklch, var(--paper), white 28%);
@@ -1509,16 +1487,12 @@ kbd {
   resize: vertical;
 }
 
-.workspace-open[hidden] {
+.workspace-bar [hidden] {
   display: none;
 }
 
 @media (max-width: 720px) {
   .workspace-status {
     margin-left: 0;
-  }
-
-  .workspace-open {
-    grid-template-columns: 1fr;
   }
 }

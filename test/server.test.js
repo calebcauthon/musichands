@@ -10,7 +10,7 @@ test("serves the app's own files and nothing else", () => {
   assert.equal(resolveFile("/"), path.join(ROOT, "index.html"));
   assert.equal(resolveFile("/studio.html?v=3"), path.join(ROOT, "studio.html"));
   assert.equal(resolveFile("/assets/piano/C4.mp3"), path.join(ROOT, "assets", "piano", "C4.mp3"));
-  for (const hidden of ["/.git/config", "/.serena/project.yml", "/assets/../.git/HEAD", "/../secret.js", "/%2e%2e/%2e%2e/etc/passwd", "/test/server.test.js", "/server.js", "/package.json", "/private/score.musicxml", "/notes.txt", "/assets/%00.js", "/%E0%A4%A"]) {
+  for (const hidden of ["/.git/config", "/.serena/project.yml", "/assets/../.git/HEAD", "/../secret.js", "/%2e%2e/%2e%2e/etc/passwd", "/test/server.test.js", "/server.js", "/package.json", "/private/score.musicxml", "/scores/minor-descent.musicxml", "/scores/starter.json", "/notes.txt", "/assets/%00.js", "/%E0%A4%A"]) {
     assert.equal(resolveFile(hidden), null, hidden);
   }
 });

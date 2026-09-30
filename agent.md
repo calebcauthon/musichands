@@ -55,11 +55,12 @@ to your requests so the page can say who made a change.
 ## The workspace document
 
 `GET /api/workspaces/<id>` returns `{ id, name, token, url, api, manual,
-connectionString, version, state, updated }`. `state` is the whole screen:
+connectionString, version, state, scores, updated }`. `scores` lists the pieces
+the workspace holds (see "Scores"). `state` is the whole screen:
 
 ```json
 {
-  "score":   { "kind": "bundled", "url": "./scores/minor-descent.musicxml", "title": "Minor Descent" },
+  "score":   { "id": "9f2c…", "title": "Minor Descent" },
   "time":    0,
   "tempo":   null,
   "reflexes": 1,
@@ -75,7 +76,7 @@ connectionString, version, state, updated }`. `state` is the whole screen:
 
 | Field | Meaning |
 | --- | --- |
-| `score` | Which piece is open. `kind: "bundled"` with a `url` under `./scores/`, or `kind: "uploaded"` with the `id` returned by `POST /api/scores`. `title` is for display. |
+| `score` | Which of the workspace's own scores is open: the `id` of an entry in `scores`. `title` is filled in by the server. An id the workspace does not hold is ignored. `null` only when the workspace has no scores. |
 | `time` | The moment on screen, in quarter notes from the start of the piece. The page snaps to the last struck moment at or before this. |
 | `tempo` | Quarter notes a minute when playing, 30–240. `null` means the score's own tempo (or 80 if it has none). |
 | `reflexes` | How fast the hands move between chords, 0.5–4 (1 is natural). |
@@ -192,7 +193,7 @@ every change:
 
 ```
 event: state
-data: {"version":8,"state":{…},"name":"Evening practice","by":"caleb"}
+data: {"version":8,"state":{…},"name":"Evening practice","scores":[…],"by":"caleb"}
 ```
 
 `by` is the `x-client` (or `?client=`) of whoever made the change, empty when
@@ -201,42 +202,56 @@ what the page sees, as soon as it does. Polling `/screen` works too.
 
 ## Scores
 
-`POST /api/scores` with a MusicXML body (`content-type:
-application/vnd.recordare.musicxml+xml`, or JSON `{ "xml": "…" }`) stores the
-piece and answers `{ id, title, measures }`. Then point the workspace at it:
+Every workspace holds its own scores. There are no scores shared by the whole
+site: a new workspace is given its own copies of a few starter pieces, and
+anything added after that belongs to that workspace alone. All of these need
+the workspace's token.
+
+`GET /api/workspaces/<id>/scores` lists them: `{ scores: [{ id, title,
+measures, added }] }`. The same list comes with the workspace document and
+with every event on the stream, and it is what the page's score menu shows.
+
+`POST /api/workspaces/<id>/scores` with a MusicXML body (`content-type:
+application/vnd.recordare.musicxml+xml`, or JSON `{ "xml": "…", "title": "…" }`
+to name it yourself) adds a piece and answers `{ id, title, measures, version,
+scores }`. Then open it:
 
 ```json
-{ "score": { "kind": "uploaded", "id": "<id>", "title": "<title>" }, "time": 0 }
+{ "score": { "id": "<id>" }, "time": 0, "corrections": { "fingers": null, "hands": null } }
 ```
 
-Uploaded scores are addressed by content hash, so uploading the same file
-twice is harmless. `GET /api/scores/<id>` returns the MusicXML and
-`GET /api/scores/<id>/summary` its title, measure count and tempo. Bundled
-scores are the ones under `./scores/` on the site; the page's score menu lists
-them.
+A score's id is the hash of its MusicXML, so adding the same file twice is
+harmless. `GET /api/workspaces/<id>/scores/<score id>` returns the MusicXML and
+`…/scores/<score id>/summary` its title, measure count and tempo.
 
-## Making more workspaces
+`DELETE /api/workspaces/<id>/scores/<score id>` takes a piece out of the
+workspace for good. If it was the one open, the workspace moves to its first
+remaining score and the corrections are cleared.
 
-Workspaces are cheap. `POST /api/workspaces` (no token needed) with an
-optional JSON body:
+## Other workspaces
 
-- `{ "name": "Left hand only" }` makes an empty one with the default score.
+Each person has one workspace: their browser is given it on the first visit
+and comes back to it every time. You can still make others to experiment in.
+`POST /api/workspaces` (no token needed) with an optional JSON body:
+
 - `{ "name": "Try 4-1-2", "copyFrom": { "id": "<id>", "token": "<token>" } }`
-  copies an existing workspace, corrections and all, so you can experiment
-  without disturbing the one the person is looking at.
-- `{ "state": {…} }` starts from a state you give.
+  copies an existing workspace, scores and corrections and all, so you can
+  experiment without disturbing the one the person is looking at.
+- `{ "name": "Left hand only" }` makes a new one holding the starter scores.
+- `{ "state": {…} }` does the same, starting from a state you give.
 
 The answer (`201`) carries the new `id`, `token`, `url`
-(`<site>/#ws=<id>&token=<token>`, which opens it in a browser) and a
-`connectionString` you can hand to another agent or person. Tell the person the
-`url` if you want them to see your workspace: there is no list of workspaces,
-and no way to reach one without its token.
+(`<site>/#ws=<id>&token=<token>`) and a `connectionString` you can hand to
+another agent. Give the person the `url` if you want them to see your
+workspace: it opens as a visit, with a "Back to my workspace" button, and
+their own workspace is left as it was. There is no list of workspaces, and no
+way to reach one without its token.
 
-`DELETE /api/workspaces/<id>` removes a workspace for good.
+`DELETE /api/workspaces/<id>` removes a workspace and its scores for good.
 
 ## Errors
 
 Every error is JSON `{ "error": "…" }`: `400` for a body that cannot be used,
 `401` for a missing or wrong token, `403` for copying with the wrong token,
-`404` for an unknown workspace or score, `409` when the workspace names a score
-the server does not have.
+`404` for an unknown workspace or a score the workspace does not hold, `409`
+when the workspace has no score open.

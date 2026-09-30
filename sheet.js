@@ -13,7 +13,7 @@ import { PianoAudio } from "./piano-audio.js";
 import { readMxl } from "./mxl.js";
 import { parseScore } from "./score-model.js";
 import { ScoreTransport } from "./score-transport.js";
-import { forgetWorkspace, parseConnection, rememberedWorkspaces, rememberWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
+import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
 
 const scoreSelect = document.querySelector("#score-select");
 const scoreFile = document.querySelector("#score-file");
@@ -33,7 +33,6 @@ const playButtons = {
   roundtrip: document.querySelector("#play-roundtrip"),
 };
 const DEFAULT_TEMPO = 120; // quarter notes a minute, for scores that do not state one
-const importedScores = document.querySelector("#imported-scores");
 const libraryActions = document.querySelector("#library-actions");
 const dropHint = document.querySelector("#drop-hint");
 const handsPanel = document.querySelector(".hands-panel");
@@ -51,17 +50,11 @@ const positionLists = {
   left: document.querySelector("#left-positions"),
 };
 const bar = {
-  select: document.querySelector("#workspace-select"),
-  name: document.querySelector("#workspace-name"),
-  fresh: document.querySelector("#workspace-new"),
-  copy: document.querySelector("#workspace-copy"),
-  open: document.querySelector("#workspace-open"),
   connect: document.querySelector("#workspace-connect"),
+  home: document.querySelector("#workspace-home"),
   status: document.querySelector("#workspace-status"),
   statusText: document.querySelector("#workspace-status-text"),
-  form: document.querySelector("#workspace-open-form"),
-  paste: document.querySelector("#workspace-paste"),
-  cancel: document.querySelector("#workspace-open-cancel"),
+  string: document.querySelector("#workspace-string"),
 };
 const editor = {
   details: document.querySelector("#finger-editor"),
@@ -71,8 +64,6 @@ const editor = {
   clear: document.querySelector("#finger-clear"),
   status: document.querySelector("#finger-editor-status"),
 };
-const UPLOADS = "musichands-uploads"; // scores this browser has sent to the server: [{ id, title }]
-
 const SOURCE_LABEL = {
   score: "fingering from the score",
   override: "corrected fingering",
@@ -96,14 +87,12 @@ const page = {
   tempo: DEFAULT_TEMPO, // quarter notes a minute, as the transport uses it
   cursorAt: null, // the score time the notation cursor was last moved to
   measureShown: null, // the measure the hands were last shown in
-  sidecar: {}, // fingerings that came with a bundled score
   notes: [],
   doubts: [],
 };
 // The workspace as it is on the screen, so only what changed is redrawn.
 let shown = {};
 let ws = null; // the open WorkspaceClient
-let uploads = readUploads();
 
 const handsView = await createHandView(handsStage, {
   interactive: true,
@@ -206,7 +195,7 @@ function momentAt(step) {
 // Works the fingering out again from the score and the workspace's corrections.
 function refinger(corrections) {
   const moved = applyHandMoves(page.score.events, corrections.hands);
-  const fingered = assignFingering(moved, { overrides: { ...page.sidecar, ...corrections.fingers } });
+  const fingered = assignFingering(moved, { overrides: corrections.fingers });
   page.events = fingered.events;
   page.positions = fingered.positions;
   page.steps = buildSteps(page.events);
@@ -231,26 +220,23 @@ function refinger(corrections) {
   }
 }
 
-async function loadSidecar(url) {
-  const sidecar = url.replace(/\.(musicxml|xml)$/i, ".fingering.json");
-  try {
-    const response = await fetch(sidecar);
-    return response.ok ? await response.json() : {};
-  } catch {
-    return {};
-  }
-}
-
-// Fetches and reads the score a workspace names. Returns false if it cannot.
+// Fetches and reads one of the workspace's scores. Returns false if it cannot.
 async function loadScore(score) {
+  stopTransport();
+  if (!score) {
+    page.score = null;
+    page.xml = null;
+    scoreTitle.textContent = "No score yet";
+    document.title = "MusicHands — Sheet Music";
+    scoreContainer.replaceChildren();
+    setStatus("Import a score to begin", "idle");
+    return false;
+  }
   const label = score.title || "the score";
   setStatus(`Reading ${label}`, "idle");
-  stopTransport();
   let xml;
   try {
-    const response = await fetch(score.kind === "bundled" ? score.url : `./api/scores/${score.id}`);
-    if (!response.ok) throw new Error(response.status === 404 ? "it is not on this server" : `the server answered ${response.status}`);
-    xml = await response.text();
+    xml = await ws.readScore(score.id);
     page.score = parseScore(xml);
   } catch (error) {
     page.score = null;
@@ -258,13 +244,11 @@ async function loadScore(score) {
     return false;
   }
   page.xml = xml;
-  page.sidecar = score.kind === "bundled" ? await loadSidecar(score.url) : {};
   page.notes = [];
   page.doubts = [];
   page.measureShown = null;
   scoreTitle.textContent = page.score.title;
   document.title = `MusicHands — ${page.score.title}`;
-  showScoreChoice(score);
   try {
     await renderNotation(xml);
   } catch (error) {
@@ -758,67 +742,32 @@ editor.details.addEventListener("toggle", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Scores: bundled ones, and ones sent to the server
+// Scores: the workspace's own
 
-function readUploads() {
-  try {
-    const list = JSON.parse(localStorage.getItem(UPLOADS) ?? "[]");
-    return Array.isArray(list) ? list.filter((entry) => /^[0-9a-f]{64}$/.test(entry?.id)) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeUploads(list) {
-  uploads = list.slice(0, 40);
-  try {
-    localStorage.setItem(UPLOADS, JSON.stringify(uploads));
-  } catch {
-    // The list lasts only for this visit.
-  }
-  showUploads();
-}
-
-function showUploads() {
-  importedScores.replaceChildren(
-    ...uploads.map((entry) => {
+// Lists the workspace's scores and marks the one that is open.
+function showScores() {
+  const open = ws?.state?.score;
+  scoreSelect.replaceChildren(
+    ...(ws?.scores ?? []).map((entry) => {
       const option = document.createElement("option");
       option.value = entry.id;
       option.textContent = entry.title;
       return option;
     }),
   );
-  importedScores.hidden = uploads.length === 0;
+  scoreSelect.value = open?.id ?? "";
+  libraryActions.hidden = !open;
 }
 
-// Marks the open score in the list, adding an uploaded one the list did not know.
-function showScoreChoice(score) {
-  const value = score.kind === "bundled" ? score.url : score.id;
-  if (score.kind === "uploaded" && !uploads.some((entry) => entry.id === score.id)) {
-    writeUploads([{ id: score.id, title: score.title || page.score?.title || "Uploaded score" }, ...uploads]);
-  }
-  scoreSelect.value = value;
-  if (scoreSelect.value !== value) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = score.title || value;
-    scoreSelect.append(option);
-    scoreSelect.value = value;
-  }
-  libraryActions.hidden = score.kind !== "uploaded";
-}
-
-// Points the workspace at another piece. Corrections are by moment, so they
-// stay behind with the piece they were made for.
-function chooseScore(score) {
-  ws.change({ score, time: 0, playing: false, corrections: { fingers: null, hands: null } });
+// Points the workspace at another of its pieces. Corrections are by moment,
+// so they stay behind with the piece they were made for.
+function chooseScore({ id, title }) {
+  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null } });
 }
 
 scoreSelect.addEventListener("change", () => {
-  const value = scoreSelect.value;
-  const option = scoreSelect.selectedOptions[0];
-  if (/^[0-9a-f]{64}$/.test(value)) chooseScore({ kind: "uploaded", id: value, title: option?.textContent ?? "" });
-  else chooseScore({ kind: "bundled", url: value, title: option?.textContent ?? "" });
+  const entry = ws?.scores.find((known) => known.id === scoreSelect.value);
+  if (entry) chooseScore(entry);
 });
 
 // Turns a PDF of a score into MusicXML. The reader is only fetched when needed.
@@ -843,12 +792,11 @@ async function importScoreFile(file) {
     else throw new Error("it is not a PDF, MusicXML or MXL file");
     const title = parseScore(xml).title;
     const named = title && title !== "Untitled" ? title : file.name.replace(/\.[^.]+$/, "");
-    setStatus(`Sending ${named} to the server`, "idle");
-    const uploaded = await ws.uploadScore(xml);
-    writeUploads([{ id: uploaded.id, title: named }, ...uploads.filter((entry) => entry.id !== uploaded.id)]);
+    setStatus(`Adding ${named} to your workspace`, "idle");
+    const added = await ws.addScore(xml, named);
     // What the reader had to guess at is worth saying once the piece is up.
-    pendingImportNotes = { id: uploaded.id, notes, doubts };
-    chooseScore({ kind: "uploaded", id: uploaded.id, title: named });
+    pendingImportNotes = { id: added.id, notes, doubts };
+    chooseScore(added);
   } catch (error) {
     setStatus(`Could not import ${file.name}: ${error.message}`, "outside");
   }
@@ -873,12 +821,14 @@ document.querySelector("#save-score").addEventListener("click", () => {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
-document.querySelector("#remove-score").addEventListener("click", () => {
-  const id = scoreSelect.value;
-  if (!/^[0-9a-f]{64}$/.test(id)) return;
-  writeUploads(uploads.filter((entry) => entry.id !== id));
-  const first = scoreSelect.querySelector("optgroup:not([hidden]) option");
-  if (first) chooseScore({ kind: "bundled", url: first.value, title: first.textContent });
+document.querySelector("#remove-score").addEventListener("click", async () => {
+  const entry = ws?.scores.find((known) => known.id === scoreSelect.value);
+  if (!entry || !window.confirm(`Remove “${entry.title}” from your workspace?`)) return;
+  try {
+    await ws.removeScore(entry.id);
+  } catch (error) {
+    setStatus(`Could not remove ${entry.title}: ${error.message}`, "outside");
+  }
 });
 
 // A score can also be dropped anywhere on the page.
@@ -1130,12 +1080,17 @@ async function applyLatest() {
   latest = null;
 
   const scoreKey = JSON.stringify(state.score);
+  const scoresKey = JSON.stringify([client.scores, state.score?.id]);
+  if (scoresKey !== shown.scores) {
+    showScores();
+    shown.scores = scoresKey;
+  }
   if (scoreKey !== shown.scoreKey) {
-    shown = { scoreKey };
+    shown = { scoreKey, scores: scoresKey };
     const loaded = await loadScore(state.score);
     if (ws !== client) return; // the workspace changed while the score was on its way
     if (!loaded) return;
-    if (pendingImportNotes && pendingImportNotes.id === state.score.id) {
+    if (pendingImportNotes?.id === state.score.id) {
       page.notes = pendingImportNotes.notes;
       page.doubts = pendingImportNotes.doubts;
     }
@@ -1213,21 +1168,7 @@ async function applyLatest() {
 }
 
 // ---------------------------------------------------------------------------
-// Workspaces: opening, switching, making, and handing to an agent
-
-function showWorkspaceList() {
-  const known = rememberedWorkspaces();
-  bar.select.replaceChildren(
-    ...known.map((entry) => {
-      const option = document.createElement("option");
-      option.value = entry.id;
-      option.textContent = entry.name || entry.id;
-      option.selected = entry.id === ws?.id;
-      return option;
-    }),
-  );
-  bar.name.value = ws?.name ?? "";
-}
+// The workspace: this browser's own, or one opened from a link
 
 const hashFor = (entry) => `#ws=${entry.id}&token=${entry.token}`;
 
@@ -1239,18 +1180,21 @@ async function openWorkspace({ id, token }) {
   const client = new WorkspaceClient({ id, token });
   ws = client;
   shown = {};
-  setWorkspaceStatus("Opening the workspace", "idle");
+  setWorkspaceStatus("Opening your workspace", "idle");
   try {
     await client.open();
   } catch (error) {
     if (ws === client) ws = null;
-    forgetWorkspace(id);
     throw error;
   }
   if (ws !== client) return;
-  rememberWorkspace({ id, token, name: client.name });
-  if (location.hash !== hashFor(client)) history.replaceState(null, "", hashFor(client));
-  showWorkspaceList();
+  // The first workspace a browser opens is its own from then on. Another,
+  // opened from a link, is a visit: the address names it, and home is a click away.
+  if (!homeWorkspace()) keepHomeWorkspace(client);
+  const visiting = homeWorkspace().id !== id;
+  history.replaceState(null, "", visiting ? hashFor(client) : location.pathname + location.search);
+  bar.home.hidden = !visiting;
+  bar.string.hidden = true;
   client.addEventListener("state", (event) => {
     if (ws === client) sync(event.detail);
   });
@@ -1271,74 +1215,47 @@ async function openWorkspace({ id, token }) {
   sync({ state: client.state, version: client.version, by: "" });
 }
 
-// Finds a workspace to show: the one in the address, then the last one this
-// browser opened, else a new one.
-async function openFirstWorkspace() {
-  const candidates = [workspaceFromHash(), ...rememberedWorkspaces()].filter(Boolean);
-  for (const candidate of candidates) {
+// Opens this browser's own workspace. A browser without one is given one,
+// already holding the starter scores, so a newcomer can begin at once.
+async function openHome() {
+  const home = homeWorkspace();
+  if (home) {
     try {
-      await openWorkspace(candidate);
+      await openWorkspace(home);
       return;
     } catch (error) {
-      console.warn(`MusicHands: workspace ${candidate.id} could not be opened.`, error);
+      console.warn(`MusicHands: workspace ${home.id} could not be opened.`, error);
+      // Only a workspace the server says is gone is given up; one that cannot be reached just now is still theirs.
+      if (![401, 404].includes(error.status)) {
+        setWorkspaceStatus(`Your workspace could not be reached: ${error.message}. Reload to try again.`, "outside");
+        return;
+      }
+      keepHomeWorkspace(null);
     }
   }
-  await makeWorkspace({ name: "My workspace" });
-}
-
-async function makeWorkspace(body) {
-  setWorkspaceStatus("Making a workspace", "idle");
+  setWorkspaceStatus("Setting up your workspace", "idle");
   try {
-    const made = await WorkspaceClient.create("", body);
-    await openWorkspace(made);
+    await openWorkspace(await WorkspaceClient.create("", { name: "My workspace" }));
   } catch (error) {
-    setWorkspaceStatus(`The workspace could not be made: ${error.message}`, "outside");
+    setWorkspaceStatus(`Your workspace could not be set up: ${error.message}`, "outside");
   }
 }
 
-bar.select.addEventListener("change", () => {
-  const entry = rememberedWorkspaces().find((known) => known.id === bar.select.value);
-  if (entry && entry.id !== ws?.id) openWorkspace(entry).catch((error) => setWorkspaceStatus(`That workspace could not be opened: ${error.message}`, "outside"));
-});
-
-bar.name.addEventListener("change", async () => {
-  if (!ws || !bar.name.value.trim()) return;
-  try {
-    const name = await ws.rename(bar.name.value.trim());
-    rememberWorkspace({ id: ws.id, token: ws.token, name });
-    showWorkspaceList();
-  } catch (error) {
-    setWorkspaceStatus(`The name could not be changed: ${error.message}`, "outside");
+// Shows the workspace the address names, if it names one, else this browser's own.
+async function openFirstWorkspace() {
+  const linked = workspaceFromHash();
+  if (linked) {
+    try {
+      await openWorkspace(linked);
+      return;
+    } catch (error) {
+      console.warn(`MusicHands: workspace ${linked.id} could not be opened.`, error);
+    }
   }
-});
+  await openHome();
+}
 
-bar.fresh.addEventListener("click", () => makeWorkspace({ name: `Workspace ${rememberedWorkspaces().length + 1}` }));
-bar.copy.addEventListener("click", () => {
-  if (ws) makeWorkspace({ name: `${ws.name} (copy)`, copyFrom: { id: ws.id, token: ws.token } });
-});
-
-bar.open.addEventListener("click", () => {
-  bar.form.hidden = !bar.form.hidden;
-  if (!bar.form.hidden) bar.paste.focus();
-});
-bar.cancel.addEventListener("click", () => {
-  bar.form.hidden = true;
-});
-bar.form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const entry = parseConnection(bar.paste.value);
-  if (!entry) {
-    setWorkspaceStatus("That does not look like a workspace link or connection string", "outside");
-    return;
-  }
-  try {
-    await openWorkspace(entry);
-    bar.form.hidden = true;
-    bar.paste.value = "";
-  } catch (error) {
-    setWorkspaceStatus(`That workspace could not be opened: ${error.message}`, "outside");
-  }
-});
+bar.home.addEventListener("click", openHome);
 
 bar.connect.addEventListener("click", async () => {
   if (!ws) return;
@@ -1348,9 +1265,9 @@ bar.connect.addEventListener("click", async () => {
     setWorkspaceStatus("Connection string copied · paste it to your agent", "connected");
   } catch {
     // No clipboard: show the string so it can be copied by hand.
-    bar.form.hidden = false;
-    bar.paste.value = ws.info?.connectionString ?? "";
-    bar.paste.select();
+    bar.string.hidden = false;
+    bar.string.value = ws.info?.connectionString ?? "";
+    bar.string.select();
     setWorkspaceStatus("Copy the connection string from the box", "idle");
   }
 });
@@ -1360,6 +1277,5 @@ window.addEventListener("hashchange", () => {
   if (entry && entry.id !== ws?.id) openWorkspace(entry).catch((error) => setWorkspaceStatus(`That workspace could not be opened: ${error.message}`, "outside"));
 });
 
-showUploads();
 window.musichands = { page, get workspace() { return ws; } };
 await openFirstWorkspace();

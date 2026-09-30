@@ -43,7 +43,7 @@ The front page shows a whole piece with hand positions. (`/sheet.html`, its old 
 
 - `score-model.js` reads MusicXML (via the tiny reader in `xml.js`) into a timeline of hand moments: which notes each hand holds at each beat. On a grand staff the top staff is the right hand. A piece set on more staves (Rachmaninoff's C-sharp minor prelude uses four) is read measure by measure: the staves in use are shared out, the top half to the right hand and the bottom half to the left, and a lone staff goes by its clef.
 - `mxl.js` unpacks compressed `.mxl` files in the browser, so the "Open MusicXML…" button accepts either format.
-- `fingering.js` groups each hand's notes into positions that fit under one hand and chooses fingers for each position. Fingerings written in the score win, then entries in `scores/<name>.fingering.json` (keyed `"measure:beat"`), then a heuristic guess. The page labels which one it used.
+- `fingering.js` groups each hand's notes into positions that fit under one hand and chooses fingers for each position. Corrections made in the workspace win, then fingerings written in the score, then a heuristic guess. The page labels which one it used.
 - The notation itself is drawn by [OpenSheetMusicDisplay](https://opensheetmusicdisplay.org/), loaded from a CDN; only the sheet view uses it.
 - Each position card is a still rendered by one shared offscreen stage, drawn only when the card scrolls into view.
 
@@ -57,21 +57,21 @@ A note tied over from before is held, not played again: its finger stays down, i
 
 Step through the piece with the arrow keys or the Next button, click a measure in the score, or click a position card to jump. Each step sounds the notes struck at that moment. Space replays the moment together, Shift + Space one note at a time, and the Sound switch turns it all off.
 
-Scores live in `scores/`. The two that come with the app, both versions of Minor Descent, were written for it. Bring in anything else with "Import a score…"; imported scores go to the server's data folder and are not part of this repository.
+Every workspace holds its own scores; none are shared by the whole site. A new workspace starts with a copy of each score named in `scores/starter.json`: the two that come with the app, both versions of Minor Descent, which were written for it. To change what newcomers start with, put a MusicXML file in `scores/` and add its name to that list. Bring in anything else with "Import a score…"; imported scores go into the workspace, in the server's data folder, and are not part of this repository.
 
 ## Workspaces and agents
 
 Everything the sheet page shows is a **workspace**: a small JSON document on the server holding the score, the moment on screen, tempo, reflexes, whether it is playing, the camera (view, saved shots, auto cut), which hands are drawn and heard, finger numbers, sound, and every correction. The page only projects it. Reload and it is all still there; open the same link in another browser and both show the same thing and move together; the longest-connected browser plays the music for the others.
 
-The bar under the title names the workspace and lets you make a new one, duplicate the current one (corrections included), switch between the ones this browser has opened, or open one from its link. A workspace's link is `/#ws=<id>&token=<token>`; the token is the only credential, and it opens only that workspace.
+Each browser has one workspace of its own. A first visit makes it, already holding the starter scores, so there is nothing to set up; every later visit comes back to it, because the browser keeps its id and token. There is no list of workspaces to choose from. A workspace's link is `/#ws=<id>&token=<token>`; the token is the only credential, and it opens only that workspace. Opened in a browser with no workspace yet, the link becomes that browser's own, which is how to carry a workspace to another device. Opened in a browser that has one, it is a visit: "Back to my workspace" returns to the browser's own, which is left untouched.
 
-**Copy agent connection string** puts on the clipboard everything an agent needs: the site, the workspace id and token, and a link to the manual. Paste it into whatever agent you run — there is no chat box or model in the app — and ask it to look at what you are looking at. The manual, [`agent.md`](./agent.md) (served at `/agent.md`), covers the API: `GET /api/workspaces/<id>/screen` for what is on screen, `PATCH /api/workspaces/<id>` for changes (any field, including corrections such as `{"corrections":{"hands":{"5:2.5":{"C4":"right"}}}}`), `POST …/commands` to play or stop, a server-sent-events stream for following along, `POST /api/scores` to upload a piece, and `POST /api/workspaces` to make more.
+**Copy agent connection string** puts on the clipboard everything an agent needs: the site, the workspace id and token, and a link to the manual. Paste it into whatever agent you run — there is no chat box or model in the app — and ask it to look at what you are looking at. The manual, [`agent.md`](./agent.md) (served at `/agent.md`), covers the API: `GET /api/workspaces/<id>/screen` for what is on screen, `PATCH /api/workspaces/<id>` for changes (any field, including corrections such as `{"corrections":{"hands":{"5:2.5":{"C4":"right"}}}}`), `POST …/commands` to play or stop, a server-sent-events stream for following along, `POST /api/workspaces/<id>/scores` to add a piece, and `POST /api/workspaces` to make another workspace to experiment in.
 
-`workspace-model.js` is the state's shape, cleaning and merging, and the screen projection; `workspace-client.js` is the page's side (events stream, batched patches); `server.js` keeps workspaces as `data/workspaces/<id>.json` and uploaded scores as `data/scores/<hash>.musicxml`.
+`workspace-model.js` is the state's shape, cleaning and merging, and the screen projection; `workspace-client.js` is the page's side (events stream, batched patches); `server.js` keeps each workspace as `data/workspaces/<id>.json`, with its scores beside it as `data/workspaces/<id>/scores/<hash>.musicxml`.
 
 ## Importing scores
 
-"Import a score…" on the sheet page takes a PDF, MusicXML or MXL file; so does dropping one anywhere on the page. The piece is sent to the server (`POST /api/scores`, addressed by content hash) and the workspace is pointed at it; the browser lists what it has uploaded under "Your uploads". "Save MusicXML" writes the current one out as a file, which is also the way to correct a misread score in a notation program and bring it back.
+"Import a score…" on the sheet page takes a PDF, MusicXML or MXL file; so does dropping one anywhere on the page. The piece is added to the workspace's scores (`POST /api/workspaces/<id>/scores`, addressed by content hash) and opened; the Score menu lists everything the workspace holds, and "Remove" takes the open one out. "Save MusicXML" writes the current one out as a file, which is also the way to correct a misread score in a notation program and bring it back.
 
 ### PDFs
 
@@ -88,7 +88,7 @@ A measure whose notes do not add up to the time signature is named in the status
 
 ## Deploying
 
-`npm start` runs `server.js`, a server with no dependencies that listens on `$PORT`, serves the app's own files and nothing else, and keeps workspaces and uploaded scores under `DATA_DIR` (default `./data`). Set `PUBLIC_URL` if the site is reached through a different address from the one the server sees.
+`npm start` runs `server.js`, a server with no dependencies that listens on `$PORT`, serves the app's own files and nothing else, and keeps workspaces and their scores under `DATA_DIR` (default `./data`). Set `PUBLIC_URL` if the site is reached through a different address from the one the server sees.
 
 It runs on [Railway](https://railway.com/) at <https://musichands-production.up.railway.app>, with a volume mounted at `/data` and `DATA_DIR=/data` set on the service. To put out a new version, run `railway up --service musichands` from this folder.
 

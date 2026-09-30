@@ -9,7 +9,7 @@ export const LIMITS = { tempo: [30, 240], reflexes: [0.5, 4] };
 
 export function defaultState() {
   return {
-    score: { kind: "bundled", url: "./scores/minor-descent.musicxml", title: "Minor Descent" },
+    score: null, // { id, title }: one of the workspace's own scores; the server opens the first
     time: 0, // quarter notes from the start of the piece: the moment on screen
     tempo: null, // quarter notes a minute; null means the score's own
     reflexes: 1, // how many times faster than usual the hands move
@@ -68,9 +68,8 @@ export function cleanState(value) {
   if (!isObject(value)) return base;
   const state = base;
   if (isObject(value.score)) {
-    const { kind, url, id, title } = value.score;
-    if (kind === "bundled" && typeof url === "string" && /^\.\/scores\/[\w.-]+\.(musicxml|xml)$/.test(url)) state.score = { kind, url, title: String(title ?? "") };
-    else if (kind === "uploaded" && typeof id === "string" && /^[0-9a-f]{64}$/.test(id)) state.score = { kind, id, title: String(title ?? "") };
+    const { id, title } = value.score;
+    if (typeof id === "string" && /^[0-9a-f]{64}$/.test(id)) state.score = { id, title: String(title ?? "") };
   }
   if (Number.isFinite(value.time)) state.time = Math.max(0, value.time);
   if (value.tempo === null) state.tempo = null;
