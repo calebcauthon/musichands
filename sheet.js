@@ -16,6 +16,7 @@ import { parseScore } from "./score-model.js";
 import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js";
 import { ScoreTransport } from "./score-transport.js";
 import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
+import { LIMITS } from "./workspace-model.js";
 
 const songList = document.querySelector("#song-list");
 const scoreFile = document.querySelector("#score-file");
@@ -855,19 +856,25 @@ playScore.addEventListener("click", togglePlaying);
 function showTempo(tempo) {
   const previous = page.tempo;
   page.tempo = tempo;
+  // The range first: a value outside the slider's range is clamped as it is set.
+  showTempoTicks(page.score?.tempo ?? DEFAULT_TEMPO);
   tempoSlider.value = tempo;
   tempoOutput.value = tempo;
-  showTempoTicks(page.score?.tempo ?? DEFAULT_TEMPO);
   if (tempo !== previous) transport.retime(previous);
 }
 
-// Marks along the tempo slider at the score's own tempo and at a quarter, a
-// half and three quarters of it. Clicking one sets the tempo.
+// The slider runs from a quarter of the score's own tempo to one and a half
+// times it, which puts the score's tempo about 60% of the way along whatever
+// the piece; marks sit at the score's tempo and at a quarter, a half and
+// three quarters of it, and clicking one sets the tempo.
 const TICK_LABELS = { 0.25: "¼", 0.5: "½", 0.75: "¾" };
 function showTempoTicks(normal) {
   if (tempoTicks.dataset.normal === String(normal)) return;
   tempoTicks.dataset.normal = normal;
-  const [low, high] = [Number(tempoSlider.min), Number(tempoSlider.max)];
+  const low = Math.max(LIMITS.tempo[0], Math.round(normal * 0.25));
+  const high = Math.min(LIMITS.tempo[1], Math.round(normal * 1.5));
+  tempoSlider.min = low;
+  tempoSlider.max = high;
   tempoTicks.replaceChildren(
     ...Object.entries({ ...TICK_LABELS, 1: String(normal) }).flatMap(([share, label]) => {
       const tempo = Math.round(normal * Number(share));
