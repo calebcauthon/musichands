@@ -3,9 +3,11 @@
 // Bones never change length: a pose is only the hand's position and turn plus
 // joint angles, and everything drawn comes from running those through the
 // skeleton. The solver finds the pose whose fingertips rest on their keys
-// while staying as close as it can to a relaxed playing shape.
+// while staying as close as it can to a relaxed playing shape, on the end of
+// a forearm that comes from the seated player's shoulder (player-body.js).
 import { FINGER_JOINTS } from "./glb-skeleton.js";
 import { BLACK_FRONT, KEYBOARD, keyCenterAt, keyDipAt, surfaceHeight } from "./piano-geometry.js";
+import { BODY, ELBOW_SWING, forearmDirection } from "./player-body.js";
 import { mat4, vec3 } from "./rig-math.js";
 
 const DEG = Math.PI / 180;
@@ -56,15 +58,20 @@ const FINGER_MODEL = {
 const DIP_FOLLOWS_PIP = 0.55; // the last joint curls with the middle one
 const THUMB_MCP_SHARE = 0.45; // how much of the thumb's flex its knuckle takes
 const HAND_REST = { yaw: 0, pitch: 4, roll: 0 };
-const HAND_LIMITS = { yaw: [-32, 32], pitch: [-14, 30], roll: [-16, 16] };
+const HAND_LIMITS = { yaw: [-44, 44], pitch: [-14, 30], roll: [-16, 16] };
+// How far the wrist bends where the hand meets the forearm, in degrees. It
+// gives much more toward the little finger than toward the thumb.
+const WRIST_LIMITS = { toPinky: 28, toThumb: 16, back: 42, under: 24 };
 const HOVER = 0.009; // how far idle fingertips float above the keys
 const LIFT = 0.011; // how far a finger rises before it strikes
 
-// Layout of the pose vector.
+// Layout of the pose vector: the hand, three angles for each finger, and last
+// how far the elbow behind the hand is swung out from where it would hang.
 const HAND_VARS = ["x", "y", "z", "yaw", "pitch", "roll"];
 const FINGER_VARS = { 1: ["swing", "drop", "flex"], 2: ["abd", "mcp", "pip"], 3: ["abd", "mcp", "pip"], 4: ["abd", "mcp", "pip"], 5: ["abd", "mcp", "pip"] };
 const OFFSET = { 1: 6, 2: 9, 3: 12, 4: 15, 5: 18 };
-export const POSE_SIZE = 21;
+const ELBOW = 21;
+export const POSE_SIZE = 22;
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const hinge = (value) => (value > 0 ? value : 0);
@@ -111,6 +118,17 @@ function handMatrix(pose, scale) {
   matrix[13] = pose[1];
   matrix[14] = pose[2];
   return matrix;
+}
+
+// How the wrist is bent for a hand on the end of its forearm, in radians:
+// `sideways` is positive toward the thumb, `back` positive with the hand
+// cocked up. The solver only ever sees right hands, a left one being mirrored.
+function wristBend(pose, hand, scale) {
+  const forearm = forearmDirection("right", [pose[0], pose[1], pose[2]], pose[ELBOW]);
+  const across = vec3.dot(forearm, mat4.axisX(hand)) / scale;
+  const up = vec3.dot(forearm, mat4.axisY(hand)) / scale;
+  const along = -vec3.dot(forearm, mat4.axisZ(hand)) / scale;
+  return { sideways: Math.atan2(across, along), back: -Math.asin(clamp(up, -1, 1)) };
 }
 
 // How each bone of one finger has moved from rest, in wrist space.
@@ -205,6 +223,7 @@ function bounds() {
       upper[OFFSET[finger] + index] = FINGER_MODEL[finger].limits[name][1] * DEG;
     });
   }
+  [lower[ELBOW], upper[ELBOW]] = ELBOW_SWING;
   return { lower, upper };
 }
 
@@ -297,7 +316,7 @@ function contactFor(finger, target) {
   const thumb = finger === 1;
   const range = key.black
     ? [key.zBack + 0.008, key.zFront - 0.006]
-    : [thumb ? BLACK_FRONT - 0.012 : key.zBack + 0.01, -0.007];
+    : [thumb ? BLACK_FRONT - 0.012 : key.zBack + 0.01, thumb ? -0.009 : -0.007];
   return { key, range, preferred: key.black ? model.depth.black : model.depth.white, state: target.state ?? "rest" };
 }
 
@@ -317,6 +336,8 @@ function buildResiduals(rig, contacts, scale, options) {
   const heightAt = options.mirror ? (x, z) => surfaceHeight(-x, z) : surfaceHeight;
   const restAngles = restPose();
   const curl = options.curl ?? 0;
+  // How hard fingertips hold their keys against everything else the hand wants.
+  const grip = MM * 4 * (options.grip ?? 1);
   for (const finger of LONG_FINGERS) {
     restAngles[OFFSET[finger] + 1] += curl * 12 * DEG;
     restAngles[OFFSET[finger] + 2] += curl * 22 * DEG;
@@ -338,10 +359,10 @@ function buildResiduals(rig, contacts, scale, options) {
         const { key, range, preferred } = contact;
         const tolerance = key.black ? 0.0012 : 0.0025;
         const sideways = ball[0] - keyCenterAt(key, ball[2]);
-        out.push(Math.sign(sideways) * hinge(Math.abs(sideways) - tolerance) * MM * 4);
-        out.push((ball[1] - radius - surfaceUnder(contact, ball[2])) * MM * 4);
-        out.push((hinge(range[0] - ball[2]) - hinge(ball[2] - range[1])) * MM * 4);
-        out.push((ball[2] - preferred) * MM * 0.1);
+        out.push(Math.sign(sideways) * hinge(Math.abs(sideways) - tolerance) * grip);
+        out.push((ball[1] - radius - surfaceUnder(contact, ball[2])) * grip);
+        out.push((hinge(range[0] - ball[2]) - hinge(ball[2] - range[1])) * grip);
+        out.push((ball[2] - preferred) * MM * 0.15);
       } else {
         const floor = heightAt(ball[0], ball[2]);
         out.push((ball[1] - radius - floor - HOVER) * MM * 0.7);
@@ -382,7 +403,18 @@ function buildResiduals(rig, contacts, scale, options) {
       const looseness = contacts[finger] && contacts[finger + 1] ? 1.5 : 4;
       out.push((pose[OFFSET[finger] + 1] - pose[OFFSET[finger + 1] + 1]) * looseness);
     }
-    out.push((pose[3] - restAngles[3]) * 16);
+    // The hand would like to lie square to the keys and straight on the end
+    // of its forearm. Away from the player's shoulder it cannot do both, so
+    // it turns part of the way, the elbow swings to follow, and the wrist
+    // bends the rest.
+    const wrist = wristBend(pose, hand, scale);
+    out.push((pose[3] - restAngles[3]) * 10);
+    out.push(wrist.sideways * 9);
+    out.push(pose[ELBOW] * 7);
+    out.push(hinge(wrist.sideways - WRIST_LIMITS.toThumb * DEG) * 30);
+    out.push(hinge(-wrist.sideways - WRIST_LIMITS.toPinky * DEG) * 30);
+    out.push(hinge(wrist.back - WRIST_LIMITS.back * DEG) * 40);
+    out.push(hinge(-wrist.back - WRIST_LIMITS.under * DEG) * 40);
     out.push((pose[4] - restAngles[4] - (options.lift ?? 0) * 10 * DEG) * 12);
     out.push((pose[5] - restAngles[5]) * 22);
     if (!assigned.length) out.push(0);
@@ -390,26 +422,51 @@ function buildResiduals(rig, contacts, scale, options) {
   };
 }
 
-// Put the relaxed hand where its fingertips are nearest their keys.
+// Put the relaxed hand where its fingertips are nearest their keys, turned
+// most of the way toward the forearm it will be on the end of.
 function initialPose(rig, contacts, scale) {
   const pose = restPose();
-  const hand = handMatrix(pose, scale);
-  let count = 0;
-  const sum = [0, 0, 0];
-  for (const finger of FINGERS) {
-    const contact = contacts[finger];
-    if (!contact) continue;
-    const { ball } = fingerPoints(rig, finger, pose, hand);
-    const z = contact.preferred;
-    sum[0] += keyCenterAt(contact.key, z) - ball[0];
-    sum[1] += surfaceUnder(contact, z) + rig.fingers[finger].radius * scale - ball[1];
-    sum[2] += z - ball[2];
-    count += 1;
+  for (let pass = 0; pass < 2; pass += 1) {
+    const hand = handMatrix(pose, scale);
+    let count = 0;
+    const sum = [0, 0, 0];
+    for (const finger of FINGERS) {
+      const contact = contacts[finger];
+      if (!contact) continue;
+      const { ball } = fingerPoints(rig, finger, pose, hand);
+      const z = contact.preferred;
+      sum[0] += keyCenterAt(contact.key, z) - ball[0];
+      sum[1] += surfaceUnder(contact, z) + rig.fingers[finger].radius * scale - ball[1];
+      sum[2] += z - ball[2];
+      count += 1;
+    }
+    if (!count) break;
+    pose[0] += sum[0] / count;
+    pose[1] += sum[1] / count;
+    pose[2] += sum[2] / count;
+    if (pass === 0) {
+      const forearm = forearmDirection("right", [pose[0], pose[1], pose[2]], pose[ELBOW]);
+      pose[3] = clamp(Math.atan2(-forearm[0], -forearm[2]) * 0.6, HAND_LIMITS.yaw[0] * DEG, HAND_LIMITS.yaw[1] * DEG);
+    }
   }
-  if (count) {
-    pose[0] = sum[0] / count;
-    pose[1] = sum[1] / count;
-    pose[2] = sum[2] / count;
+  return pose;
+}
+
+// How far a pose swings the elbow behind its hand out from where it would hang, in radians.
+export const elbowSwing = (pose) => pose[ELBOW];
+
+// The hand at rest on the player's thigh, where it waits with nothing to play.
+export function lapPose() {
+  const pose = restPose();
+  const { wrist, yaw, pitch, roll } = BODY.lap;
+  [pose[0], pose[1], pose[2]] = wrist;
+  pose[3] = yaw * DEG;
+  pose[4] = pitch * DEG;
+  pose[5] = roll * DEG;
+  // Fingers lie flatter on a leg than they stand on the keys.
+  for (const finger of LONG_FINGERS) {
+    pose[OFFSET[finger] + 1] = 14 * DEG;
+    pose[OFFSET[finger] + 2] = 20 * DEG;
   }
   return pose;
 }
@@ -447,7 +504,7 @@ export function solvePose(rig, targets, options = {}) {
 
   if (options.from) {
     // Re-solve only the fingers, keeping the hand where an earlier solve put it.
-    const free = ALL_FREE.filter((index) => index >= 6);
+    const free = ALL_FREE.filter((index) => index >= 6 && index !== ELBOW);
     const residuals = buildResiduals(rig, contacts, options.from.scale, { ...options, lower, upper });
     const { pose } = minimize(residuals, options.from.pose, { lower, upper, free, iterations: 30 });
     return { pose, scale: options.from.scale, error: contactError(rig, contacts, pose, options.from.scale) };
@@ -463,11 +520,21 @@ export function solvePose(rig, targets, options = {}) {
     for (const yaw of [-14, 14]) {
       if (contactError(rig, contacts, result.pose, scale) < 0.0015) break;
       const turned = start.slice();
-      turned[3] = yaw * DEG;
+      turned[3] = clamp(start[3] + yaw * DEG, lower[3], upper[3]);
       const other = minimize(residuals, turned, { lower, upper, free: ALL_FREE });
       if (other.cost < result.cost) result = other;
     }
-    const error = contactError(rig, contacts, result.pose, scale);
+    let error = contactError(rig, contacts, result.pose, scale);
+    if (error > 0.0005 && error < 0.004) {
+      // Nearly there: comfort is holding a fingertip just off its key, so let the keys win.
+      const firm = buildResiduals(rig, contacts, scale, { ...options, lower, upper, grip: 4 });
+      const held = minimize(firm, result.pose, { lower, upper, free: ALL_FREE, iterations: 30 });
+      const heldError = contactError(rig, contacts, held.pose, scale);
+      if (heldError < error) {
+        result = held;
+        error = heldError;
+      }
+    }
     if (!best || error < best.error - 0.0005) best = { pose: result.pose, scale, error, cost: result.cost };
     if (error < 0.0015) break;
   }
@@ -489,6 +556,7 @@ export function describePose(pose) {
   for (const finger of FINGERS) {
     out[finger] = Object.fromEntries(FINGER_VARS[finger].map((name, index) => [name, pose[OFFSET[finger] + index] / DEG]));
   }
+  out.elbow = pose[ELBOW] / DEG;
   return out;
 }
 

@@ -1,7 +1,9 @@
-// The 3D stage: a piano keyboard and up to two hands, lit and filmed.
+// The 3D stage: a piano keyboard and the player's two hands, lit and filmed.
 //
 // Hands are a rigged mesh posed by hand-rig.js, so bones keep their lengths
-// and every move between positions is a real joint rotation.
+// and every move between positions is a real joint rotation. Each hand is on
+// the end of an arm from the seated player's shoulder (player-figure.js), and
+// rests on the player's lap when it has nothing to play.
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
@@ -18,8 +20,9 @@ import { cleanView, DRAG_THRESHOLD, dragOrbit, framingDistance, orbitPosition, r
 import { dueForCut, readShots, ShotList, STARTER_SHOTS } from "./camera-shots.js";
 import { FINGER_JOINTS, readSkeleton } from "./glb-skeleton.js";
 import { noteToMidi } from "./hand-model.js";
-import { blendPose, createRig, poseMatrices, solvePose } from "./hand-rig.js";
+import { blendPose, createRig, elbowSwing, lapPose, poseMatrices, solvePose } from "./hand-rig.js";
 import { KEYBOARD, KEYS, keyFor } from "./piano-geometry.js";
+import { PlayerFigure } from "./player-figure.js";
 import { mat4 } from "./rig-math.js";
 import { advanceSegments } from "./pose-timeline.js";
 
@@ -35,12 +38,11 @@ const COLORS = {
   lacquer: 0x040404,
   felt: 0x6d1320,
   skin: 0xd8a07c,
-  sleeve: 0x0d0d10,
-  cuff: 0xf2efe8,
 };
 const KEY_LAG = 30; // ms between a finger starting down and its key following
 const KEY_FALL = 25; // ms for a key to reach the bottom, where a piano sounds
 const PRESS = 95; // ms for a lifted finger to come down
+const LAP = { duration: 520, arc: 0.095 }; // ms between the lap and the keys, and how high the hand lifts to clear their front edge
 const FARTHEST = 1.7; // how many times its starting distance the camera may back away when turned
 const DRIFT = { turn: 1.1, push: 0.012 }; // degrees and share of zoom gained each second within a shot
 const SHOTS_KEY = "musichands-shots";
@@ -307,62 +309,6 @@ function createLightSkinMaterial() {
   });
 }
 
-// A jacket sleeve with a shirt cuff, from the wrist back toward the elbow.
-function createSleeve() {
-  const group = new THREE.Group();
-  const ring = (radiusX, radiusY, z, centerY = -0.001) => ({ radiusX, radiusY, z, centerY });
-  const loft = (rings, material, segments = 40) => {
-    const positions = [];
-    const indices = [];
-    rings.forEach((entry, row) => {
-      for (let step = 0; step <= segments; step += 1) {
-        const angle = (step / segments) * Math.PI * 2;
-        // A soft rectangle rather than an ellipse, the way cloth sits on a wrist.
-        const c = Math.cos(angle);
-        const s = Math.sin(angle);
-        const squared = (value) => Math.sign(value) * Math.abs(value) ** 0.8;
-        positions.push(0.001 + squared(c) * entry.radiusX, entry.centerY + squared(s) * entry.radiusY, entry.z);
-        if (row < rings.length - 1 && step < segments) {
-          const a = row * (segments + 1) + step;
-          const b = a + segments + 1;
-          indices.push(a, a + 1, b, a + 1, b + 1, b);
-        }
-      }
-    });
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setIndex(indices);
-    geometry.computeVertexNormals();
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
-    return mesh;
-  };
-  const cuffMaterial = new THREE.MeshPhysicalMaterial({ color: COLORS.cuff, roughness: 0.85, sheen: 0.4, sheenRoughness: 0.8, side: THREE.DoubleSide });
-  const sleeveMaterial = new THREE.MeshPhysicalMaterial({ color: COLORS.sleeve, roughness: 0.9, sheen: 1, sheenColor: new THREE.Color(0x3a3a48), sheenRoughness: 0.5, side: THREE.DoubleSide });
-  group.add(
-    loft(
-      [ring(0.029, 0.0215, 0.006), ring(0.0335, 0.026, 0.0045), ring(0.0345, 0.027, 0.012), ring(0.035, 0.0275, 0.034)],
-      cuffMaterial,
-    ),
-  );
-  group.add(
-    loft(
-      [
-        ring(0.03, 0.023, 0.021),
-        ring(0.0385, 0.031, 0.0195),
-        ring(0.04, 0.0325, 0.03),
-        ring(0.043, 0.036, 0.1, -0.003),
-        ring(0.05, 0.043, 0.22, -0.006),
-        ring(0.058, 0.05, 0.42, -0.01),
-        ring(0.064, 0.056, 0.85, -0.03),
-      ],
-      sleeveMaterial,
-    ),
-  );
-  return group;
-}
-
 class HandActor {
   constructor(side, asset, materials) {
     this.side = side;
@@ -392,18 +338,11 @@ class HandActor {
         object.frustumCulled = false;
       }
     });
-    this.sleeve = createSleeve();
-    this.root.add(this.sleeve);
-    this.sleeveMaterials = [];
-    this.sleeve.traverse((object) => {
-      if (!object.isMesh) return;
-      const full = object.material;
-      const light = new THREE.MeshLambertMaterial({ color: full.color, side: full.side });
-      this.sleeveMaterials.push({ object, full, light });
-    });
 
     this.segments = [];
     this.state = null; // { pose, scale }
+    this.resting = true; // on the lap, or on its way there
+    this.moved = false; // since the player's arm was last fitted to it
     this.targets = []; // fingers currently assigned, for badges
     this.balls = {};
     this.key = "";
@@ -412,11 +351,11 @@ class HandActor {
 
   setLightMaterial(light) {
     for (const mesh of this.skinMeshes) mesh.material = light ? this.materials.light : this.materials.full;
-    for (const entry of this.sleeveMaterials) entry.object.material = light ? entry.light : entry.full;
   }
 
   apply(state) {
     this.state = state;
+    this.moved = true;
     const { hand, joints, balls, reach } = poseMatrices(this.rig, state.pose, state.scale);
     this.reach = {};
     for (const [finger, point] of Object.entries(reach)) {
@@ -507,6 +446,11 @@ export class HandStage {
     this.camera = new THREE.PerspectiveCamera(CAMERA.fov, 2.35, 0.05, 8);
     this.buildLights();
     this.buildPiano();
+    // The player has no arms to draw until the hands have loaded.
+    this.player = new PlayerFigure();
+    this.player.setLight(this.quality === "light");
+    this.player.group.visible = false;
+    this.scene.add(this.player.group);
     this.buildComposer();
     this.resize();
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -521,7 +465,8 @@ export class HandStage {
         this.hands[side] = actor;
         this.scene.add(actor.root);
       }
-      for (const side of SIDES) if (this.requests[side]) this.place(side, this.requests[side], { immediate: true });
+      this.player.group.visible = true;
+      for (const side of SIDES) this.place(side, this.requests[side], { immediate: true });
       this.frameCamera(true);
       this.invalidate();
       return this;
@@ -754,6 +699,7 @@ export class HandStage {
       for (const entry of this.keys.values()) entry.material = name === "light" ? entry.lightMaterial : entry.fullMaterial;
       for (const label of this.labelMeshes) label.visible = name !== "light" && this.options.showNotes;
       for (const actor of Object.values(this.hands)) actor.setLightMaterial(name === "light");
+      this.player.setLight(name === "light");
       // Materials bake the shadow settings into their shaders.
       this.scene.traverse((object) => {
         if (object.material) object.material.needsUpdate = true;
@@ -805,7 +751,10 @@ export class HandStage {
     if (before !== JSON.stringify([this.options.curl, this.options.lift, this.options.scale])) {
       this.solved.clear();
       this.prepared.clear();
-      for (const side of SIDES) if (this.requests[side]) this.place(side, { ...this.requests[side], strike: false }, { settle: true });
+      for (const side of SIDES) {
+        if (this.requests[side]) this.place(side, { ...this.requests[side], strike: false }, { settle: true });
+        else if (this.hands[side]) this.place(side, null, { immediate: true });
+      }
     }
     this.invalidate();
   }
@@ -816,7 +765,7 @@ export class HandStage {
   }
 
   // specs: { left, right }, each { fingers: [{ finger, note }], activeMidis: [], strike: bool, strikeMidis: [] },
-  // or null to withdraw that hand. Returns how many milliseconds from now the
+  // or null to rest that hand on the player's lap. Returns how many milliseconds from now the
   // struck keys will land, so sound can be timed to the fingers. With `landIn`
   // the strike is timed to land that many milliseconds from now: the hands
   // wait if that is more time than they need, and hurry if it is less.
@@ -979,19 +928,20 @@ export class HandStage {
   place(side, request, { immediate = false, settle = false } = {}) {
     const actor = this.hands[side];
     if (!actor) return null;
+    actor.root.visible = true;
     if (!request) {
       actor.targets = [];
       actor.key = "";
       actor.extent = null;
-      if (immediate || !actor.root.visible || !actor.state) {
+      const lap = this.lapState();
+      if (immediate || !actor.state) {
         actor.segments = [];
-        actor.root.visible = false;
-        return null;
+        actor.resting = true;
+        actor.apply(lap);
+      } else if (!actor.resting) {
+        actor.resting = true;
+        actor.segments = [{ from: actor.state, to: lap, duration: LAP.duration / this.options.speed, ease: easeInOut, arc: LAP.arc }];
       }
-      const away = { pose: actor.state.pose.slice(), scale: actor.state.scale };
-      away.pose[1] += 0.05;
-      away.pose[2] += 0.22;
-      actor.segments = [{ from: actor.state, to: away, duration: 420 / this.options.speed, ease: easeInOut, arc: 0, done: () => { actor.root.visible = false; actor.state = null; } }];
       return null;
     }
     const midiOf = new Map(request.fingers.map((entry) => [entry.finger, noteToMidi(entry.note)]));
@@ -1014,7 +964,8 @@ export class HandStage {
     const key = `${request.fingers.map((entry) => `${entry.finger}:${entry.note}`).join(",")}|${[...active].sort().join(",")}`;
     const samePlace = actor.key === key;
     actor.key = key;
-    actor.root.visible = true;
+    const fromLap = actor.resting;
+    actor.resting = false;
 
     const strikes = request.strike && Object.values(liftedStates).includes("lifted");
     const struckKeys = actor.targets.filter((target) => liftedStates[target.finger] === "lifted").map((target) => target.midi);
@@ -1031,24 +982,38 @@ export class HandStage {
       actor.segments = [approach, press];
       return { actor, approach, press, travel: duration, keys: struckKeys };
     };
-    if (!actor.state) {
-      // The hand comes in from the player's side.
-      const entering = { pose: pressed.pose.slice(), scale: pressed.scale };
-      entering.pose[1] += 0.05;
-      entering.pose[2] += 0.22;
-      actor.apply(entering);
-      if (strikes) return strikeFrom(entering, 520 / speed, 0);
-      actor.segments = [{ from: entering, to: pressed, duration: 520 / speed, ease: easeInOut, arc: 0 }];
-      return null;
-    }
+    if (!actor.state) actor.apply(this.lapState());
     if (samePlace && !request.strike && !settle) return null;
 
     const from = { pose: actor.state.pose.slice(), scale: actor.state.scale };
+    // A hand coming up from the lap lifts over the front of the keys on its way.
+    if (fromLap) {
+      if (strikes) return strikeFrom(from, LAP.duration / speed, LAP.arc);
+      actor.segments = [{ from, to: pressed, duration: LAP.duration / speed, ease: easeInOut, arc: LAP.arc }];
+      return null;
+    }
     const travel = Math.hypot(pressed.pose[0] - from.pose[0], pressed.pose[2] - from.pose[2]);
     const arc = clamp(travel * 0.22, 0, 0.022);
     if (strikes) return strikeFrom(from, clamp(170 + travel * 1500, 170, 480) / speed, arc);
     actor.segments = [{ from, to: pressed, duration: clamp(120 + travel * 1500, 120, 480) / speed, ease: easeInOut, arc }];
     return null;
+  }
+
+  // Where a hand waits on the player's lap.
+  lapState() {
+    return { pose: lapPose(), scale: this.options.scale };
+  }
+
+  // Fits the player's arms to the hands wherever they have got to.
+  seatPlayer() {
+    const actors = SIDES.map((side) => this.hands[side]).filter((actor) => actor?.state);
+    if (!actors.some((actor) => actor.moved)) return;
+    const hands = {};
+    for (const actor of actors) {
+      actor.moved = false;
+      hands[actor.side] = { matrix: actor.root.matrix.elements, scale: actor.state.scale, swing: elbowSwing(actor.state.pose) };
+    }
+    this.player.pose(hands);
   }
 
   refreshKeys(immediate) {
@@ -1300,6 +1265,7 @@ export class HandStage {
   }
 
   render() {
+    this.seatPlayer();
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
     this.updateBadges();
