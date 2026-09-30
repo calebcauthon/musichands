@@ -18,158 +18,112 @@
   </head>
   <body>
     <main class="app-shell sheet-shell">
-      <header class="masthead">
-        <div>
-          <p class="eyebrow">MusicHands / sheet music · <a class="crumb" href="./studio.html">Hand position studio</a></p>
-          <h1 id="score-title">Loading the score…</h1>
-        </div>
-        <p class="lede">
-          Bring in a score as a PDF or MusicXML file, step through it, and watch
-          both hands move across the keyboard, each finger landing on its key.
-        </p>
-      </header>
-
-      <section class="workspace-bar" aria-label="Workspace">
-        <div class="workspace-actions" role="group" aria-label="Workspace">
-          <button class="button button--primary" type="button" id="workspace-connect" title="Copy everything an agent needs to see and change this screen">Copy agent connection string</button>
-          <a class="crumb" href="./agent.md" target="_blank" rel="noopener">Agent manual</a>
-          <button class="button" type="button" id="workspace-home" title="Leave this shared workspace and go back to your own" hidden>Back to my workspace</button>
-        </div>
+      <header class="sheet-head">
+        <p class="eyebrow">MusicHands / sheet music · <a class="crumb" href="./studio.html">Hand position studio</a></p>
         <p class="live-status workspace-status" id="workspace-status" data-state="idle">
           <span class="status-dot" aria-hidden="true"></span>
           <span id="workspace-status-text">Opening your workspace</span>
         </p>
-        <textarea class="workspace-string" id="workspace-string" rows="5" readonly hidden aria-label="Agent connection string"></textarea>
+      </header>
+
+      <!-- The line of music being played, over the piano: the same picture full screen shows. -->
+      <section class="theater" aria-label="The music and the hands">
+        <div class="score-panel" aria-label="Sheet music">
+          <div id="score-container" class="score-container"></div>
+        </div>
+        <div class="hands-panel">
+          <div class="transport" role="group" aria-label="Play the score">
+            <button class="button button--primary" type="button" id="play-score" title="Play the score from here (P)">▶ Play</button>
+            <div class="stepper" role="group" aria-label="Step through the score">
+              <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>
+              <button class="button" type="button" id="step-prev" title="Previous (←)">←</button>
+              <button class="button" type="button" id="step-next" title="Next (→)">→</button>
+            </div>
+            <div class="slider-field" title="How fast the music plays, in quarter notes a minute. The marks are the score's own tempo and a quarter, a half and three quarters of it.">
+              <label for="tempo">Tempo</label>
+              <span class="slider-track">
+                <input id="tempo" type="range" min="30" max="240" step="1" value="120" />
+                <span class="slider-ticks" id="tempo-ticks"></span>
+              </span>
+              <output id="tempo-output" for="tempo">120</output>
+            </div>
+            <label class="check-field numbers-toggle" title="Show the finger numbers over the keys (N)">
+              <input id="numbers-toggle" type="checkbox" checked />
+              <span>Finger numbers</span>
+            </label>
+            <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
+            <button class="button gear" type="button" id="settings-open" title="Detail, agents and the look of the notation" aria-label="Settings">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="3.2" />
+                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+              </svg>
+            </button>
+          </div>
+          <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
+          <button class="song-name" type="button" id="score-title" title="Change the song, or bring in another">Loading the score…</button>
+          <div class="hand-choice" role="group" aria-label="Which hands to see and hear">
+            <button class="button" type="button" data-hands="left" aria-pressed="false" title="See and hear the left hand on its own">Left hand only</button>
+            <button class="button" type="button" data-hands="both" aria-pressed="true" title="See and hear both hands">Both hands</button>
+            <button class="button" type="button" data-hands="right" aria-pressed="false" title="See and hear the right hand on its own">Right hand only</button>
+          </div>
+        </div>
       </section>
 
-      <section class="sheet-toolbar" aria-label="Score controls">
-        <label class="field field--inline">
-          <span>Score</span>
-          <select id="score-select" title="The scores in your workspace"></select>
-        </label>
-        <label class="button file-button" title="Bring in a PDF, MusicXML or MXL file. You can also drop one anywhere on the page.">
-          Import a score…
-          <input id="score-file" type="file" accept=".pdf,.xml,.musicxml,.mxl" hidden />
-        </label>
-        <div class="library-actions" id="library-actions" hidden>
-          <button class="button" type="button" id="save-score" title="Save this score as a MusicXML file">Save MusicXML</button>
-          <button class="button" type="button" id="remove-score" title="Take this score out of your workspace">Remove</button>
-        </div>
-        <div class="stepper" role="group" aria-label="Step through the score">
-          <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>
-          <button class="button" type="button" id="step-prev" title="Previous (←)">←</button>
-          <button class="button button--primary" type="button" id="step-next" title="Next (→)">Next →</button>
-        </div>
-        <p class="live-status" id="sheet-status" data-state="idle">
-          <span class="status-dot" aria-hidden="true"></span>
-          <span id="sheet-status-text">Reading the score</span>
-        </p>
-      </section>
+      <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>
 
-      <section class="score-panel" aria-label="Sheet music">
-        <div class="staff-legend-bar">
-          <label class="field field--inline guides-toggle">
+      <dialog class="sheet-dialog" id="song-dialog" aria-labelledby="song-dialog-title">
+        <form method="dialog" class="sheet-dialog__form">
+          <div class="sheet-dialog__head">
+            <h2 id="song-dialog-title">Songs</h2>
+            <button class="sheet-dialog__close" type="submit" aria-label="Close">×</button>
+          </div>
+          <p class="sheet-dialog__hint">The songs in this workspace. Pick one to play it.</p>
+          <div id="song-list" class="song-list" role="list"></div>
+          <div class="sheet-dialog__actions">
+            <label class="button button--primary file-button" title="Bring in a PDF, MusicXML or MXL file. You can also drop one anywhere on the page.">
+              Import a song…
+              <input id="score-file" type="file" accept=".pdf,.xml,.musicxml,.mxl" hidden />
+            </label>
+            <button class="button" type="button" id="remove-score" title="Take this song out of your workspace">Remove this song</button>
+          </div>
+          <p class="live-status" id="sheet-status" data-state="idle">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span id="sheet-status-text">Reading the score</span>
+          </p>
+        </form>
+      </dialog>
+
+      <dialog class="sheet-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
+        <form method="dialog" class="sheet-dialog__form">
+          <div class="sheet-dialog__head">
+            <h2 id="settings-dialog-title">Settings</h2>
+            <button class="sheet-dialog__close" type="submit" aria-label="Close">×</button>
+          </div>
+          <h3 class="sheet-dialog__section">Picture</h3>
+          <label class="field field--inline">
+            <span>Detail</span>
+            <select id="quality-select" aria-label="Detail level"></select>
+          </label>
+          <p class="sheet-dialog__hint">Full is the cinematic look; Balanced drops the depth of field; Light draws without shadows and is easiest on the computer. Until you choose, the stage steps down on its own when frames fall behind.</p>
+          <h3 class="sheet-dialog__section">Agents</h3>
+          <p class="sheet-dialog__hint">An agent with the connection string sees what you see and can change it: the moment, the tempo, the camera, the fingering.</p>
+          <div class="sheet-dialog__actions">
+            <button class="button button--primary" type="button" id="workspace-connect" title="Copy everything an agent needs to see and change this screen">Copy agent connection string</button>
+            <a class="button" href="./agent.md" target="_blank" rel="noopener">Agent manual</a>
+            <button class="button" type="button" id="workspace-home" title="Leave this shared workspace and go back to your own" hidden>Back to my workspace</button>
+          </div>
+          <textarea class="workspace-string" id="workspace-string" rows="5" readonly hidden aria-label="Agent connection string"></textarea>
+          <h3 class="sheet-dialog__section">Notation</h3>
+          <label class="check-field guides-toggle">
             <input id="guides-toggle" type="checkbox" checked />
             <span>Colour the lines</span>
           </label>
           <div id="staff-legend" class="staff-legend" aria-label="Line colours by note name"></div>
-          <span class="staff-legend-hint">Faint lines mark the first two ledger lines under each staff: C and A below the treble, E and C below the bass.</span>
-        </div>
-        <div id="score-container" class="score-container"></div>
-      </section>
-
-      <section class="hands-panel" aria-label="Current hand positions">
-        <div class="workbench-bar">
-          <div>
-            <p class="position-kicker" id="hands-kicker">Measure 1 · beat 1</p>
-            <h2 id="hands-title">Both hands</h2>
-          </div>
-          <div class="play-controls">
-            <p class="fingering-note" id="fingering-note"></p>
-            <div class="play-buttons" role="group" aria-label="Hear this moment">
-              <button class="button" type="button" id="play-together" title="Play these notes together (Space)">Together</button>
-              <button class="button" type="button" id="play-succession" title="Play these notes one finger at a time (Shift + Space)">One by one</button>
-              <button class="button" type="button" id="play-roundtrip" title="Play these notes one finger at a time, up and back down">One by one &amp; back</button>
-              <label class="check-field sound-toggle" title="Turn all sound on or off">
-                <input id="sound-toggle" type="checkbox" checked />
-                <span>Sound</span>
-              </label>
-              <label class="check-field" title="Show the finger numbers over the keys (N)">
-                <input id="numbers-toggle" type="checkbox" checked />
-                <span>Finger numbers</span>
-              </label>
-            </div>
-          </div>
-        </div>
-        <div class="transport" role="group" aria-label="Play the score">
-          <button class="button button--primary" type="button" id="play-score" title="Play the score from here (P)">▶ Play</button>
-          <div class="slider-field" title="How fast the music plays, in quarter notes a minute. The marks are the score's own tempo and a quarter, a half and three quarters of it.">
-            <label for="tempo">Tempo</label>
-            <span class="slider-track">
-              <input id="tempo" type="range" min="30" max="240" step="1" value="120" />
-              <span class="slider-ticks" id="tempo-ticks"></span>
-            </span>
-            <output id="tempo-output" for="tempo">120</output>
-          </div>
-          <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
-        </div>
-        <details class="finger-editor" id="finger-editor">
-          <summary><span>Fingering at this moment</span> <span class="finger-editor__source" id="finger-editor-source"></span></summary>
-          <div class="finger-editor__body">
-            <div id="finger-editor-rows" class="finger-editor__rows"></div>
-            <div class="finger-editor__foot">
-              <label class="check-field" title="Also change every other moment where this hand plays exactly these notes">
-                <input id="finger-everywhere" type="checkbox" checked />
-                <span>Everywhere these same notes recur</span>
-              </label>
-              <button class="button" type="button" id="finger-clear" title="Take back the corrections at this moment">Undo corrections here</button>
-              <span class="finger-editor__status" id="finger-editor-status"></span>
-            </div>
-            <p class="finger-editor__hint">Pick a finger, or send a note to the other hand with ⇄. Corrections are kept in this workspace, for everyone and every agent looking at it.</p>
-          </div>
-        </details>
-        <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
-        <div class="hand-choice" role="group" aria-label="Which hands to see and hear">
-          <button class="button" type="button" data-hands="left" aria-pressed="false" title="See and hear the left hand on its own">Left hand only</button>
-          <button class="button" type="button" data-hands="both" aria-pressed="true" title="See and hear both hands">Both hands</button>
-          <button class="button" type="button" data-hands="right" aria-pressed="false" title="See and hear the right hand on its own">Right hand only</button>
-        </div>
-        <div class="hands-captions">
-          <div class="hand-strip" data-hand="left">
-            <div class="hand-toggles" role="group" aria-label="Left hand">
-              <label class="check-field" title="Draw the left hand"><input id="left-show" type="checkbox" checked /><span>Show</span></label>
-              <label class="check-field" title="Hear the left hand"><input id="left-sound" type="checkbox" checked /><span>Sound</span></label>
-            </div>
-            <p id="left-hand-caption" class="hand-caption" data-hand="left">Left hand</p>
-          </div>
-          <div class="hand-strip" data-hand="right">
-            <p id="right-hand-caption" class="hand-caption" data-hand="right">Right hand</p>
-            <div class="hand-toggles" role="group" aria-label="Right hand">
-              <label class="check-field" title="Draw the right hand"><input id="right-show" type="checkbox" checked /><span>Show</span></label>
-              <label class="check-field" title="Hear the right hand"><input id="right-sound" type="checkbox" checked /><span>Sound</span></label>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="positions-panel" aria-label="Every hand position in the piece">
-        <div class="section-heading">
-          <span class="step-number">RH</span>
-          <h2>Right-hand positions</h2>
-        </div>
-        <ol id="right-positions" class="position-list"></ol>
-        <div class="section-heading">
-          <span class="step-number">LH</span>
-          <h2>Left-hand positions</h2>
-        </div>
-        <ol id="left-positions" class="position-list"></ol>
-      </section>
-
-      <footer class="footer-note">
-        <span>Use ← and → to move through the piece, P to play it, Space to hear the moment again, F for full screen. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a position card to jump there.</span>
-        <span>Everything on this page is a workspace: reload it, open it elsewhere, or hand an agent the connection string and watch it change the screen. Fingering: your corrections first, then the score's marks, then a guess. · <a class="crumb" href="./studio.html">Shape a single hand position in the studio</a></span>
-      </footer>
-      <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>
+          <p class="sheet-dialog__hint">Faint lines mark the first two ledger lines under each staff: C and A below the treble, E and C below the bass.</p>
+          <h3 class="sheet-dialog__section">Keys</h3>
+          <p class="sheet-dialog__hint">← and → move through the piece, Home and End go to its ends, P plays it, Space hears the moment again (Shift for one finger at a time), N shows or hides the finger numbers, F is full screen. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a measure to go there.</p>
+        </form>
+      </dialog>
     </main>
     <script type="module" src="./sheet.js"></script>
   </body>

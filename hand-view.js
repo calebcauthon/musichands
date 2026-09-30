@@ -67,6 +67,10 @@ class StageView {
     this.stage.setOptions({ showBadges: show });
   }
 
+  setQuality(name) {
+    this.stage.setQuality(name);
+  }
+
   setOptions({ showNotes = true, showGuides = true, palmHeight = 44, curve = 52, weight = 30 }) {
     this.stage.setOptions({
       showNotes,

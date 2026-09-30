@@ -678,29 +678,39 @@ kbd {
   border-bottom: 1px solid var(--rule);
 }
 
-.sheet-toolbar {
+/* The top line: where you are, how the score reads, and the gear. */
+.sheet-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-md);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-md);
   padding: var(--space-sm) 0;
-  border-top: 1px solid var(--ink);
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--ink);
+}
+
+.sheet-head .eyebrow {
+  margin: 0;
+}
+
+.sheet-head .live-status {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.gear {
+  display: grid;
+  place-items: center;
+}
+
+.gear:hover {
+  transform: rotate(30deg);
 }
 
 .field--inline {
   display: flex;
   align-items: center;
   gap: var(--space-xs);
-}
-
-.field--inline span {
-  color: var(--ink-soft);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .file-button {
@@ -711,33 +721,28 @@ kbd {
 
 .stepper {
   display: flex;
-  gap: var(--space-2xs);
-  margin-left: auto;
+  gap: 2px;
 }
 
-.sheet-toolbar .live-status {
-  flex-basis: 100%;
-  margin: 0;
+/* The theater: the line of music being played, over the piano. Full screen
+   is this same block given the whole window. */
+.theater {
+  display: flex;
+  flex-direction: column;
+  height: min(calc(100vh - 120px), 1000px);
+  min-height: 520px;
+  margin-bottom: var(--space-xl);
+  border: 1px solid var(--ink);
+  background: #0b0806;
+  box-shadow: 0 1px 0 var(--paper-deep), 0 22px 44px -28px oklch(20% 0.04 50 / 0.75);
 }
 
 .score-panel {
-  margin-bottom: var(--space-xl);
-  padding: var(--space-md);
-  border: 1px solid var(--ink);
+  flex: 0 0 var(--score-strip, 34vh);
+  height: var(--score-strip, 34vh);
+  padding: 0 var(--space-lg);
+  border-bottom: 1px solid var(--ink);
   background: oklch(98% 0.012 84);
-  box-shadow: 0 1px 0 var(--paper-deep), 0 18px 40px -30px oklch(30% 0.05 50 / 0.5);
-}
-
-.staff-legend-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-sm) var(--space-md);
-  margin-bottom: var(--space-sm);
-  padding-bottom: var(--space-sm);
-  border-bottom: 1px dashed var(--paper-deep);
-  font-size: 0.85rem;
-  color: var(--ink-soft);
 }
 
 .guides-toggle {
@@ -748,6 +753,7 @@ kbd {
 .staff-legend {
   display: flex;
   gap: 0.35rem;
+  margin: var(--space-xs) 0;
 }
 
 .legend-chip {
@@ -763,13 +769,17 @@ kbd {
   background: oklch(from var(--chip) 96% 0.03 h);
 }
 
-.staff-legend-hint {
-  flex-basis: 100%;
+.score-container {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden auto;
+  scrollbar-width: none;
+  /* The lines above and below the one being played fade into the paper. */
+  mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
 }
 
-.score-container {
-  min-height: 240px;
-  overflow-x: auto;
+.score-container::-webkit-scrollbar {
+  display: none;
 }
 
 .score-container svg {
@@ -783,29 +793,11 @@ kbd {
 }
 
 .hands-panel {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  margin: 0 calc(-1 * var(--space-md)) var(--space-2xl);
-  padding: var(--space-md) var(--space-md) var(--space-sm);
-  background: oklch(95% 0.022 82 / 0.94);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid var(--ink);
-}
-
-.hands-panel .workbench-bar {
-  margin-bottom: var(--space-sm);
-}
-
-.fingering-note {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 0.74rem;
-  letter-spacing: 0.04em;
-}
-
-.fingering-note[data-source="heuristic"] {
-  color: var(--clay-deep);
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
 }
 
 /* The 3D stage: a dark room cut into the paper page. */
@@ -819,11 +811,11 @@ kbd {
 }
 
 .stage-frame {
-  aspect-ratio: 3 / 1;
+  flex: 1;
   width: 100%;
-  min-height: 200px;
-  /* The panel is pinned over the score, so never let it take most of the window. */
-  max-height: 40vh;
+  min-height: 0;
+  border: 0;
+  box-shadow: none;
 }
 
 .visual-stage.hand-stage {
@@ -867,32 +859,6 @@ kbd {
   will-change: transform;
 }
 
-.hands-captions {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-md);
-  margin-top: var(--space-xs);
-}
-
-.hand-caption {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 0.74rem;
-  letter-spacing: 0.03em;
-}
-
-.hand-caption[data-hand="right"] {
-  text-align: right;
-}
-
-.hand-caption[data-state="playing"] {
-  color: var(--ink);
-}
-
-.hand-caption[data-state="silent"] {
-  opacity: 0.55;
-}
-
 .hand-thumbnail {
   display: block;
   width: 100%;
@@ -915,90 +881,11 @@ kbd {
   border: 1px solid var(--ink);
 }
 
-.flat-hands .hand-keyboard,
-.position-card__art .hand-keyboard {
+.flat-hands .hand-keyboard {
   display: block;
   width: 100%;
   height: auto;
   min-height: 0;
-}
-
-.positions-panel .section-heading {
-  margin: var(--space-lg) 0 var(--space-sm);
-}
-
-.position-list {
-  display: flex;
-  gap: var(--space-sm);
-  margin: 0;
-  padding: 0 0 var(--space-sm);
-  list-style: none;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-}
-
-.position-card {
-  flex: 0 0 230px;
-  scroll-snap-align: center;
-  cursor: pointer;
-  border: 1px solid var(--rule);
-  background: oklch(97% 0.015 84);
-  transition: border-color 160ms ease, transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.position-card:hover,
-.position-card:focus-visible {
-  transform: translateY(-2px);
-  border-color: var(--ink);
-}
-
-.position-card.is-current {
-  border-color: var(--clay);
-  box-shadow: 0 0 0 2px var(--clay);
-}
-
-.position-card__art svg {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-.position-card__meta {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: var(--space-2xs) var(--space-xs);
-  padding: var(--space-xs) var(--space-sm) var(--space-sm);
-  font-size: 0.74rem;
-  line-height: 1.35;
-}
-
-.position-card__meta strong {
-  font-family: var(--display);
-  font-size: 0.95rem;
-  font-weight: 400;
-}
-
-.position-card__meta > span:last-child {
-  grid-column: 2;
-  color: var(--ink-soft);
-}
-
-.position-card__index {
-  grid-row: span 2;
-  align-self: start;
-  min-width: 1.6rem;
-  padding: 2px 0;
-  border: 1px solid var(--ink);
-  color: var(--ink);
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-align: center;
-}
-
-.position-card[data-source="heuristic"] .position-card__index {
-  border-style: dashed;
-  color: var(--clay-deep);
 }
 
 @media (max-width: 760px) {
@@ -1022,23 +909,6 @@ kbd {
 }
 
 /* Hearing a position: play buttons and the sound switch. */
-.play-controls {
-  display: grid;
-  justify-items: end;
-  gap: var(--space-xs);
-}
-
-.play-buttons {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-}
-
-.play-buttons .button {
-  min-height: 34px;
-  padding-block: 0;
-}
-
 .sound-toggle {
   margin-left: var(--space-xs);
 }
@@ -1054,19 +924,12 @@ kbd {
   opacity: 0.45;
 }
 
-@media (max-width: 720px) {
-  .play-controls {
-    justify-items: start;
-  }
-}
-
 .play-strip,
 .actions {
   flex-wrap: wrap;
 }
 
-.actions .button,
-.play-buttons .button {
+.actions .button {
   white-space: nowrap;
 }
 
@@ -1079,12 +942,6 @@ kbd {
 }
 
 /* Importing scores. */
-.library-actions {
-  display: flex;
-  gap: var(--space-2xs);
-}
-
-.library-actions[hidden],
 .drop-hint[hidden] {
   display: none;
 }
@@ -1103,19 +960,117 @@ kbd {
   pointer-events: none;
 }
 
-/* Playing the score: the play button and the tempo. */
+/* Playing the score: the play button, the steps and the tempo float over the
+   top of the stage, as the camera bar does over the bottom. */
 .transport {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  left: var(--space-sm);
+  z-index: 3;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-xs) var(--space-lg);
-  margin-bottom: var(--space-sm);
+  pointer-events: none;
+  opacity: 0.82;
+  transition: opacity 200ms ease;
+}
+
+.transport:hover,
+.transport:focus-within {
+  opacity: 1;
+}
+
+.transport > * {
+  pointer-events: auto;
 }
 
 .transport .button {
-  min-width: 6.2rem;
   min-height: 34px;
-  padding-block: 0;
+  padding: 0 12px;
+  border-color: oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.transport #play-score {
+  min-width: 6.2rem;
+}
+
+.transport .button.is-playing {
+  border-color: var(--clay);
+  background: var(--clay);
+}
+
+.transport .slider-field,
+.transport .slider-field output {
+  color: oklch(95% 0.03 84 / 0.9);
+  text-shadow: 0 1px 3px oklch(10% 0.02 50 / 0.8);
+}
+
+.transport .slider-tick {
+  color: oklch(95% 0.03 84 / 0.75);
+}
+
+.transport .slider-tick--normal,
+.transport .slider-tick:hover {
+  color: oklch(95% 0.03 84);
+}
+
+.transport .numbers-toggle {
+  margin-left: auto;
+  color: oklch(95% 0.03 84 / 0.9);
+  text-shadow: 0 1px 3px oklch(10% 0.02 50 / 0.8);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.transport .numbers-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: #e9a63a;
+}
+
+.transport .gear {
+  width: 34px;
+  min-width: 0;
+  padding: 0;
+}
+
+/* The song's name at the bottom of the stage; clicking it changes the song. */
+.song-name {
+  position: absolute;
+  bottom: 54px;
+  left: 50%;
+  z-index: 3;
+  max-width: 40%;
+  padding: 4px 12px;
+  border: 0;
+  background: none;
+  transform: translateX(-50%);
+  color: oklch(95% 0.03 84 / 0.85);
+  cursor: pointer;
+  font-family: var(--display);
+  font-size: 1.15rem;
+  font-style: italic;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 4px oklch(10% 0.02 50 / 0.9);
+  white-space: nowrap;
+}
+
+.song-name::after {
+  content: " ▾";
+  font-style: normal;
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+.song-name:hover {
+  color: oklch(98% 0.02 84);
 }
 
 .slider-field {
@@ -1327,354 +1282,28 @@ kbd {
 
 
 /* Choosing what to see and hear of each hand. */
-.hands-captions {
-  align-items: center;
-}
-
-.hand-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs) var(--space-md);
-}
-
-.hand-strip[data-hand="right"] {
-  justify-content: flex-end;
-}
-
-.hand-toggles {
-  display: flex;
-  gap: var(--space-sm);
-}
-
-.hand-toggles .check-field,
-.play-buttons .check-field {
-  gap: 0.3rem;
-  font-size: 0.74rem;
-  cursor: pointer;
-}
-
-.hand-toggles .check-field input {
-  width: 15px;
-  height: 15px;
-}
-
-.hand-strip.is-hidden .hand-caption {
-  opacity: 0.5;
-  text-decoration: line-through;
-}
-
-/* Correcting fingerings. */
-.finger-editor {
-  margin-bottom: var(--space-sm);
-  border: 1px solid var(--rule);
-  background: oklch(97% 0.015 84 / 0.7);
-}
-
-.finger-editor summary {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-2xs) var(--space-sm);
-  cursor: pointer;
-  color: var(--ink-soft);
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.finger-editor__source {
-  font-weight: 400;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-.finger-editor__source[data-source="heuristic"] {
-  color: var(--clay-deep);
-}
-
-.finger-editor__source[data-source="override"] {
-  color: oklch(45% 0.12 150);
-}
-
-.finger-editor__body {
-  display: grid;
-  gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm) var(--space-sm);
-}
-
-.finger-editor__rows {
-  display: grid;
-  gap: var(--space-2xs);
-}
-
-.finger-row-edit {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs);
-}
-
-.finger-row-edit__hand {
-  min-width: 3rem;
-  color: var(--ink-soft);
-  font-size: 0.74rem;
-  font-weight: 700;
-}
-
-.finger-pick {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--rule);
-  background: color-mix(in oklch, var(--paper), white 28%);
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.finger-pick--override {
-  border-color: oklch(45% 0.12 150);
-}
-
-.finger-pick--heuristic {
-  border-style: dashed;
-}
-
-.finger-pick select {
-  width: auto;
-  min-height: 26px;
-  padding: 0 22px 0 6px;
-  font-size: 0.8rem;
-  font-weight: 700;
-}
-
-.finger-editor__foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-sm);
-}
-
-.finger-editor__foot .button {
-  min-height: 30px;
-  padding: 0 10px;
-  font-size: 0.72rem;
-}
-
-.finger-editor__status {
-  color: var(--ink-soft);
-  font-size: 0.74rem;
-}
-
-.finger-editor__status[data-state="saved"] {
-  color: oklch(45% 0.12 150);
-}
-
-.finger-editor__status[data-state="failed"] {
-  color: var(--clay-deep);
-}
-
-.finger-editor__hint {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 0.74rem;
-}
-
-.finger-pick--moved {
-  border-color: var(--clay-deep);
-  background: color-mix(in oklch, var(--paper), var(--clay) 18%);
-}
-
-.finger-pick__move {
-  min-width: 26px;
-  min-height: 26px;
-  padding: 0 4px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--ink-soft);
-  font-size: 0.85rem;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.finger-pick__move:hover {
-  border-color: var(--rule);
-  color: var(--ink);
-}
-
-.workspace-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-sm) var(--space-md);
-  margin-bottom: var(--space-sm);
-  padding: var(--space-xs) 0;
-  border-top: 1px solid var(--ink);
-}
-
-.workspace-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2xs) var(--space-xs);
-}
-
-.workspace-actions .crumb {
-  margin-left: var(--space-xs);
-  font-size: 0.76rem;
-}
-
-.workspace-status {
-  margin: 0 0 0 auto;
-}
-
-.workspace-status[data-state="agent"] .status-dot {
-  background: var(--clay-deep);
-}
-
-.workspace-string {
-  flex-basis: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--rule);
-  background: color-mix(in oklch, var(--paper), white 28%);
-  font: inherit;
-  font-size: 0.8rem;
-  resize: vertical;
-}
-
-.workspace-bar [hidden] {
-  display: none;
-}
-
-@media (max-width: 720px) {
-  .workspace-status {
-    margin-left: 0;
-  }
-}
-
-/* Full screen: the piano fills the window, under the line of music being played. */
-.full-screen-button {
-  margin-left: auto;
-}
-
+/* Full screen: the theater is given the whole window. */
 body.full-screen {
   overflow: hidden;
 }
 
-body.full-screen .sheet-shell > :not(.score-panel, .hands-panel, .drop-hint) {
+body.full-screen .sheet-shell > :not(.theater, .drop-hint, dialog) {
   display: none;
 }
 
-body.full-screen .score-panel {
+body.full-screen .theater {
   position: fixed;
-  inset: 0 0 auto;
-  z-index: 3;
-  height: var(--score-strip, 34vh);
-  margin: 0;
-  padding: 0 var(--space-lg);
-  border-width: 0 0 1px;
-  box-shadow: none;
-}
-
-body.full-screen .staff-legend-bar {
-  display: none;
-}
-
-body.full-screen .score-container {
-  height: 100%;
+  inset: 0;
+  z-index: 5;
+  height: auto;
   min-height: 0;
-  overflow: hidden auto;
-  scrollbar-width: none;
-  /* The lines above and below the one being played fade into the paper. */
-  mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
-}
-
-body.full-screen .score-container::-webkit-scrollbar {
-  display: none;
-}
-
-body.full-screen .hands-panel {
-  position: fixed;
-  inset: var(--score-strip, 34vh) 0 0;
-  display: flex;
-  flex-direction: column;
   margin: 0;
-  padding: 0;
-  border: 0;
-  background: #0b0806;
-  backdrop-filter: none;
-}
-
-body.full-screen .hands-panel > :not(.stage-frame, .transport, .hand-choice) {
-  display: none;
-}
-
-body.full-screen .stage-frame {
-  flex: 1;
-  aspect-ratio: auto;
-  min-height: 0;
-  max-height: none;
   border: 0;
   box-shadow: none;
 }
 
-/* The transport floats over the top of the stage, as the camera bar does over the bottom. */
-body.full-screen .transport {
-  position: absolute;
-  top: var(--space-sm);
-  right: var(--space-sm);
-  left: var(--space-sm);
-  z-index: 3;
-  margin: 0;
-  pointer-events: none;
-  opacity: 0.82;
-  transition: opacity 200ms ease;
-}
-
-body.full-screen .transport:hover,
-body.full-screen .transport:focus-within {
-  opacity: 1;
-}
-
-body.full-screen .transport > * {
-  pointer-events: auto;
-}
-
-body.full-screen .transport .button {
-  border-color: oklch(95% 0.03 84 / 0.45);
-  color: oklch(95% 0.03 84);
-  background: oklch(18% 0.02 50 / 0.72);
-  backdrop-filter: blur(6px);
-}
-
-body.full-screen .transport .button.is-playing {
-  border-color: var(--clay);
-  background: var(--clay);
-}
-
-body.full-screen .slider-field,
-body.full-screen .slider-field output {
-  color: oklch(95% 0.03 84 / 0.9);
-  text-shadow: 0 1px 3px oklch(10% 0.02 50 / 0.8);
-}
-
-body.full-screen .slider-tick {
-  color: oklch(95% 0.03 84 / 0.75);
-}
-
-body.full-screen .slider-tick--normal,
-body.full-screen .slider-tick:hover {
-  color: oklch(95% 0.03 84);
-}
-
-/* One hand or both: the choice sits at the bottom right, above the camera bar, in full screen only. */
+/* One hand or both: the choice sits at the bottom right, above the camera bar. */
 .hand-choice {
-  display: none;
-}
-
-body.full-screen .hand-choice {
   position: absolute;
   right: var(--space-sm);
   bottom: 52px;
@@ -1683,7 +1312,7 @@ body.full-screen .hand-choice {
   gap: 2px;
 }
 
-body.full-screen .hand-choice .button {
+.hand-choice .button {
   min-height: 30px;
   padding: 0 10px;
   border-color: oklch(95% 0.03 84 / 0.45);
@@ -1693,8 +1322,155 @@ body.full-screen .hand-choice .button {
   letter-spacing: 0.04em;
 }
 
-body.full-screen .hand-choice .button[aria-pressed="true"] {
+.hand-choice .button[aria-pressed="true"] {
   border-color: #e9a63a;
   color: oklch(18% 0.02 50);
   background: #e9a63a;
+}
+
+/* The song and settings dialogs: a sheet of paper over the page. */
+.sheet-dialog {
+  width: min(32rem, calc(100% - 2 * var(--space-md)));
+  padding: 0;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: 0 30px 60px -30px oklch(20% 0.04 50 / 0.8);
+}
+
+.sheet-dialog::backdrop {
+  background: oklch(20% 0.03 50 / 0.45);
+  backdrop-filter: blur(3px);
+}
+
+.sheet-dialog__form {
+  margin: 0;
+  padding: var(--space-lg);
+}
+
+.sheet-dialog__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xs);
+}
+
+.sheet-dialog__head h2 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 2rem;
+  font-weight: 400;
+  letter-spacing: -0.03em;
+}
+
+.sheet-dialog__close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.sheet-dialog__close:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.sheet-dialog__section {
+  margin: var(--space-lg) 0 var(--space-xs);
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.sheet-dialog__hint {
+  margin: 0 0 var(--space-md);
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+}
+
+.sheet-dialog__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-md);
+}
+
+.sheet-dialog__actions a.button {
+  display: inline-flex;
+  align-items: center;
+  border-bottom-width: 1px;
+  text-decoration: none;
+}
+
+.sheet-dialog .live-status {
+  margin: var(--space-md) 0 0;
+}
+
+.sheet-dialog .workspace-status {
+  margin: 0 0 var(--space-xs);
+}
+
+.sheet-dialog .workspace-string {
+  width: 100%;
+  margin-top: var(--space-sm);
+}
+
+.song-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.song-list__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--rule);
+  background: oklch(98% 0.012 84);
+  cursor: pointer;
+  text-align: left;
+}
+
+.song-list__item strong {
+  font-family: var(--display);
+  font-size: 1.1rem;
+  font-weight: 400;
+}
+
+.song-list__item span {
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  white-space: nowrap;
+}
+
+.song-list__item:hover {
+  border-color: var(--ink);
+}
+
+.song-list__item[aria-current="true"] {
+  border-color: var(--clay);
+  box-shadow: inset 3px 0 0 var(--clay);
+}
+
+@media (max-width: 720px) {
+  .theater {
+    height: calc(100vh - 100px);
+    min-height: 420px;
+  }
+
+  .song-name {
+    max-width: 60%;
+  }
 }

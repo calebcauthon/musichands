@@ -1396,9 +1396,13 @@ export class HandStage {
     this.autoButton = button("camera-button camera-auto", "Auto cut", "Cut between your saved views as the music plays", () => this.setAutoCut(!this.autoCut));
     this.autoButton.hidden = !this.options.autoCut;
     this.resetButton = button("camera-button hand-stage__reset", "Reset view", "Put the camera back where it started", () => this.setView());
-    this.qualitySelect = document.createElement("select");
-    this.qualitySelect.className = "camera-button camera-quality";
-    this.qualitySelect.setAttribute("aria-label", "Detail level");
+    // The detail level is chosen in a select: the page's own, if it gave one, else one in the bar.
+    const ownSelect = !this.options.qualitySelect;
+    this.qualitySelect = this.options.qualitySelect ?? document.createElement("select");
+    if (ownSelect) {
+      this.qualitySelect.className = "camera-button camera-quality";
+      this.qualitySelect.setAttribute("aria-label", "Detail level");
+    }
     for (const [name, level] of Object.entries(QUALITY)) {
       const option = document.createElement("option");
       option.value = name;
@@ -1415,7 +1419,7 @@ export class HandStage {
       ),
       this.shotRail,
       this.saveButton,
-      group("camera-right", this.qualitySelect, this.autoButton, this.resetButton),
+      group("camera-right", ...(ownSelect ? [this.qualitySelect] : []), this.autoButton, this.resetButton),
     );
     this.element.append(this.cameraBar);
     this.showShots();

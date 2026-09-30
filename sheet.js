@@ -5,7 +5,7 @@
 // connection string sees and changes the same things through the API.
 import { assignFingering } from "./fingering.js";
 import { noteToMidi } from "./hand-model.js";
-import { applyHandMoves, countCorrections, matchingMoments, momentKey, withCorrection } from "./corrections.js";
+import { applyHandMoves, countCorrections } from "./corrections.js";
 import { applyChoices, HANDS } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
@@ -16,41 +16,25 @@ import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js"
 import { ScoreTransport } from "./score-transport.js";
 import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
 
-const scoreSelect = document.querySelector("#score-select");
+const songList = document.querySelector("#song-list");
 const scoreFile = document.querySelector("#score-file");
 const scoreTitle = document.querySelector("#score-title");
+const removeScore = document.querySelector("#remove-score");
+const dialogs = { song: document.querySelector("#song-dialog"), settings: document.querySelector("#settings-dialog") };
 const scoreContainer = document.querySelector("#score-container");
 const status = document.querySelector("#sheet-status");
 const statusText = document.querySelector("#sheet-status-text");
-const handsKicker = document.querySelector("#hands-kicker");
-const handsTitle = document.querySelector("#hands-title");
-const fingeringNote = document.querySelector("#fingering-note");
 const handsStage = document.querySelector("#hands-stage");
-const soundToggle = document.querySelector("#sound-toggle");
 const numbersToggle = document.querySelector("#numbers-toggle");
-const playButtons = {
-  together: document.querySelector("#play-together"),
-  succession: document.querySelector("#play-succession"),
-  roundtrip: document.querySelector("#play-roundtrip"),
-};
+const qualitySelect = document.querySelector("#quality-select");
 const DEFAULT_TEMPO = 120; // quarter notes a minute, for scores that do not state one
-const libraryActions = document.querySelector("#library-actions");
 const dropHint = document.querySelector("#drop-hint");
-const handsPanel = document.querySelector(".hands-panel");
 const fullScreenButton = document.querySelector("#full-screen");
 const playScore = document.querySelector("#play-score");
 const tempoSlider = document.querySelector("#tempo");
 const tempoOutput = document.querySelector("#tempo-output");
 const tempoTicks = document.querySelector("#tempo-ticks");
 const handChoice = document.querySelector(".hand-choice");
-const captions = {
-  right: document.querySelector("#right-hand-caption"),
-  left: document.querySelector("#left-hand-caption"),
-};
-const positionLists = {
-  right: document.querySelector("#right-positions"),
-  left: document.querySelector("#left-positions"),
-};
 const bar = {
   connect: document.querySelector("#workspace-connect"),
   home: document.querySelector("#workspace-home"),
@@ -58,23 +42,10 @@ const bar = {
   statusText: document.querySelector("#workspace-status-text"),
   string: document.querySelector("#workspace-string"),
 };
-const editor = {
-  details: document.querySelector("#finger-editor"),
-  rows: document.querySelector("#finger-editor-rows"),
-  source: document.querySelector("#finger-editor-source"),
-  everywhere: document.querySelector("#finger-everywhere"),
-  clear: document.querySelector("#finger-clear"),
-  status: document.querySelector("#finger-editor-status"),
-};
-const SOURCE_LABEL = {
-  score: "fingering from the score",
-  override: "corrected fingering",
-  heuristic: "fingering is a guess",
-};
 
 // What the page has worked out from the workspace: the score as read, its
 // fingering, and the transient things only this browser knows (which keys the
-// pointer holds, what the play buttons are sounding).
+// pointer holds, what a replay is sounding).
 const page = {
   score: null,
   xml: null,
@@ -101,6 +72,7 @@ let ws = null; // the open WorkspaceClient
 const handsView = await createHandView(handsStage, {
   interactive: true,
   autoCut: true,
+  qualitySelect,
   onCamera: (camera) => ws?.change({ camera }),
 });
 const audio = new PianoAudio({ enabled: true });
@@ -117,22 +89,6 @@ function setWorkspaceStatus(message, stateName = "connected") {
 
 // ---------------------------------------------------------------------------
 // Reading the score
-
-function describeFingers(fingers) {
-  const thumb = fingers.find((entry) => entry.finger === 1)?.note;
-  const pinky = fingers.find((entry) => entry.finger === 5)?.note;
-  const parts = [];
-  if (thumb) parts.push(`thumb on ${thumb}`);
-  if (pinky) parts.push(`pinky on ${pinky}`);
-  if (!parts.length) parts.push(fingers.map((entry) => `${entry.finger} on ${entry.note}`).join(", "));
-  return parts.join(" · ");
-}
-
-function measureLabel(position) {
-  return position.startMeasure === position.endMeasure
-    ? `m. ${position.startMeasure}`
-    : `mm. ${position.startMeasure}–${position.endMeasure}`;
-}
 
 // Steps are the distinct moments a hand attacks something; both hands share one timeline.
 function buildSteps(events) {
@@ -342,8 +298,7 @@ function renderHands({ jump = false, sound = false, landIn = null } = {}) {
   page.measureShown = step.measure;
   const landing = showHands({ jump, landIn });
   if (sound) soundMoment(page.stepIndex, landIn ?? landing, landIn !== null);
-  if (landIn !== null) queuePlaybackDetails();
-  else renderHandDetails();
+  if (landIn !== null) queueCursor();
 }
 
 function soundMoment(index, delay, playing = true) {
@@ -359,55 +314,15 @@ function soundMoment(index, delay, playing = true) {
   }
 }
 
-let detailsTimer = null;
-function queuePlaybackDetails() {
-  if (detailsTimer !== null) return;
-  detailsTimer = setTimeout(() => {
-    detailsTimer = null;
-    renderHandDetails();
+// While the score plays, the notation cursor follows a little behind the
+// hands, so a fast passage does not redraw it on every note.
+let cursorTimer = null;
+function queueCursor() {
+  if (cursorTimer !== null) return;
+  cursorTimer = setTimeout(() => {
+    cursorTimer = null;
     moveCursorTo(page.steps[page.stepIndex].time);
   }, 100);
-}
-
-function renderHandDetails() {
-  const step = page.steps[page.stepIndex];
-  if (!step) return;
-  const beat = Number.isInteger(step.beat) ? step.beat : step.beat.toFixed(2).replace(/0+$/, "");
-  handsKicker.textContent = `Measure ${step.measure} · beat ${beat}`;
-  const sources = new Set();
-  const moment = momentAt(step);
-
-  ["right", "left"].forEach((hand) => {
-    const entry = moment[hand];
-    if (!entry) {
-      captions[hand].dataset.state = "silent";
-      captions[hand].textContent = `${hand === "right" ? "Right" : "Left"} hand · not yet playing`;
-      return;
-    }
-    captions[hand].dataset.state = entry.striking ? "playing" : "holding";
-    captions[hand].textContent = `${hand === "right" ? "Right" : "Left"} hand · ${measureLabel(entry.position)} · ${describeFingers(entry.position.fingers)}`;
-    if (entry.event) sources.add(entry.event.fingeringSource);
-  });
-  const playable = Object.values(moment).some((entry) => entry.sounding.length);
-  Object.values(playButtons).forEach((button) => {
-    button.disabled = !playable;
-  });
-
-  const labels = [...sources].map((source) => SOURCE_LABEL[source]);
-  fingeringNote.textContent = labels.length ? labels.join(" · ") : "";
-  fingeringNote.dataset.source = sources.has("heuristic") ? "heuristic" : "authored";
-  handsTitle.textContent = step.events.length === 1 ? `${step.events[0].hand === "right" ? "Right" : "Left"} hand plays` : "Both hands play";
-  if (editor.details.open) renderFingerEditor();
-
-  Object.values(positionLists).forEach((list) => {
-    list.querySelectorAll(".position-card").forEach((card) => {
-      const active = Number(card.dataset.start) <= step.time && Number(card.dataset.end) > step.time;
-      if (card.classList.contains("is-current") === active) return;
-      card.classList.toggle("is-current", active);
-      // Scroll the rail sideways to the current card without moving the page itself.
-      if (active) list.scrollTo({ left: card.offsetLeft - list.clientWidth / 2 + card.clientWidth / 2, behavior: "smooth" });
-    });
-  });
 }
 
 // `jump` puts the notation where it belongs at once instead of gliding there.
@@ -431,15 +346,7 @@ function moveCursorTo(time, { jump = false } = {}) {
   cursor.show();
   const cursorElement = cursor.cursorElement;
   if (!cursorElement) return;
-  if (page.fullScreen) {
-    showLineAt(cursorElement, jump);
-    return;
-  }
-  // Keep the cursor in the part of the window the hands panel does not cover.
-  const box = cursorElement.getBoundingClientRect();
-  const floor = Math.min(window.innerHeight, handsPanel.getBoundingClientRect().top);
-  const comfortable = box.top > 70 && box.bottom < floor - 30;
-  if (!comfortable) window.scrollBy({ top: box.top + box.height / 2 - floor / 2, behavior: "smooth" });
+  showLineAt(cursorElement, jump);
 }
 
 // Moving through the score by hand is a change to the workspace's time; the
@@ -454,39 +361,6 @@ function goToStep(index) {
 function goToTime(time) {
   const index = page.steps.findIndex((step) => step.time >= time - 1e-6);
   goToStep(index === -1 ? page.steps.length - 1 : index);
-}
-
-function renderPositionLists() {
-  ["right", "left"].forEach((hand) => {
-    const list = positionLists[hand];
-    list.innerHTML = "";
-    page.positions[hand].forEach((position, index) => {
-      const item = document.createElement("li");
-      item.className = "position-card";
-      item.dataset.start = position.startTime;
-      item.dataset.end = position.endTime;
-      item.dataset.source = position.sources.includes("heuristic") ? "heuristic" : "authored";
-      item.tabIndex = 0;
-      item.setAttribute("role", "button");
-      item.innerHTML = `
-        <div class="position-card__art"></div>
-        <div class="position-card__meta">
-          <span class="position-card__index">${index + 1}</span>
-          <strong>${measureLabel(position)}</strong>
-          <span>${describeFingers(position.fingers)}</span>
-        </div>`;
-      handsView.renderCard(item.querySelector(".position-card__art"), hand, position.fingers);
-      const jump = () => goToTime(position.startTime);
-      item.addEventListener("click", jump);
-      item.addEventListener("keydown", (event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          jump();
-        }
-      });
-      list.append(item);
-    });
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -515,7 +389,7 @@ async function renderNotation(xmlText) {
       page.cursorAt = null;
       page.bands = null;
       drawStaffGuides();
-      if (page.fullScreen) showScoreStrip();
+      showScoreStrip();
     };
   }
   await page.osmd.load(xmlText);
@@ -647,7 +521,7 @@ scoreContainer.addEventListener("click", (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// Full screen: the piano fills the window, under the line of music being played
+// The strip of notation over the piano, and full screen
 
 // Where each line of music sits in the notation as it is drawn now.
 function notationBands() {
@@ -697,15 +571,8 @@ function setFullScreen(on) {
   // Where the browser will not hand over the whole screen, the page still fills its window.
   if (on) document.documentElement.requestFullscreen?.().catch(() => {});
   else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
-  if (!on) {
-    document.body.style.removeProperty("--score-strip");
-    scoreContainer.scrollTop = 0;
-  }
   // The notation is a different width now, so its lines break in new places.
-  if (page.score && page.osmd?.GraphicSheet) {
-    page.osmd.render();
-    if (!on && page.steps.length) moveCursorTo(page.steps[page.stepIndex]?.time ?? 0);
-  }
+  if (page.score && page.osmd?.GraphicSheet) page.osmd.render();
 }
 
 fullScreenButton.addEventListener("click", () => setFullScreen(!page.fullScreen));
@@ -717,135 +584,29 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Corrections: which finger, and which hand
-
-const SOURCE_WORD = { score: "from the score", override: "corrected", heuristic: "a guess" };
-const OTHER = { right: "left", left: "right" };
-
-function renderFingerEditor() {
-  const step = page.steps[page.stepIndex];
-  editor.rows.replaceChildren();
-  if (!step || !ws?.state) return;
-  const { fingers, hands: moves } = ws.state.corrections;
-  const sources = new Set();
-  let corrected = false;
-  for (const hand of ["right", "left"]) {
-    const event = step.events.find((entry) => entry.hand === hand);
-    if (!event) continue;
-    const key = momentKey(event);
-    const row = document.createElement("div");
-    row.className = "finger-row-edit";
-    const label = document.createElement("span");
-    label.className = "finger-row-edit__hand";
-    label.textContent = hand === "right" ? "Right" : "Left";
-    row.append(label);
-    const overrideHere = fingers[key]?.[hand] ?? {};
-    const written = page.score.events.find((raw) => raw.hand === hand && raw.time === event.time);
-    for (const note of [...event.notes].sort((a, b) => a.midi - b.midi)) {
-      const moved = moves[key]?.[note.note] === hand; // given to this hand by a correction
-      const authored = overrideHere[note.note] ? "override" : !moved && written?.notes.find((raw) => raw.midi === note.midi)?.finger ? "score" : "heuristic";
-      sources.add(authored);
-      if (moved || authored === "override") corrected = true;
-      const pick = document.createElement("span");
-      pick.className = `finger-pick finger-pick--${authored}${moved ? " finger-pick--moved" : ""}`;
-      pick.title = moved ? `${note.note}: moved here from the ${OTHER[hand]} hand; fingering ${SOURCE_WORD[authored]}` : `${note.note}: fingering ${SOURCE_WORD[authored]}`;
-      const name = document.createElement("span");
-      name.textContent = note.note;
-      const select = document.createElement("select");
-      select.setAttribute("aria-label", `Finger for ${note.note}, ${hand} hand`);
-      for (const finger of [1, 2, 3, 4, 5]) {
-        const option = document.createElement("option");
-        option.value = finger;
-        option.textContent = finger;
-        option.selected = finger === note.finger;
-        select.append(option);
-      }
-      select.addEventListener("change", () => correctFinger(event, note.note, Number(select.value)));
-      const move = document.createElement("button");
-      move.type = "button";
-      move.className = "finger-pick__move";
-      move.textContent = moved ? "↩" : "⇄";
-      move.title = moved ? `Give ${note.note} back to the ${OTHER[hand]} hand` : `Play ${note.note} with the ${OTHER[hand]} hand instead`;
-      move.setAttribute("aria-label", move.title);
-      move.addEventListener("click", () => moveNote(event, note.note, moved ? null : OTHER[hand]));
-      pick.append(name, select, move);
-      row.append(pick);
-    }
-    editor.rows.append(row);
-  }
-  const word = sources.has("override") ? "corrected" : sources.has("heuristic") ? "a guess" : sources.size ? "from the score" : "";
-  editor.source.textContent = word;
-  editor.source.dataset.source = sources.has("override") ? "override" : sources.has("heuristic") ? "heuristic" : "score";
-  editor.clear.hidden = !corrected;
-}
-
-// The moments a correction made here reaches: this one, or every one where the
-// same hand plays the same notes.
-const reach = (event) => (editor.everywhere.checked ? matchingMoments(page.events, event) : [event]);
-
-function correctFinger(event, note, finger) {
-  const moments = reach(event);
-  const fingers = withCorrection({}, moments, event.hand, note, finger);
-  ws.change({ corrections: { fingers } });
-  noteCorrection(`${note} → ${finger}${moments.length > 1 ? ` in ${moments.length} places` : ""}`);
-}
-
-// Gives a note to `hand` at this moment (and matching ones), or back to the score's hand when null.
-function moveNote(event, note, hand) {
-  const moments = reach(event);
-  const moves = {};
-  for (const moment of moments) moves[momentKey(moment)] = { [note]: hand };
-  ws.change({ corrections: { hands: moves } });
-  noteCorrection(hand ? `${note} → ${hand} hand${moments.length > 1 ? ` in ${moments.length} places` : ""}` : `${note} back to the score's hand`);
-}
-
-function noteCorrection(what) {
-  editor.status.textContent = `Kept in this workspace: ${what}`;
-  editor.status.dataset.state = "saved";
-}
-
-editor.clear.addEventListener("click", () => {
-  const step = page.steps[page.stepIndex];
-  if (!step) return;
-  const fingers = {};
-  const hands = {};
-  for (const event of step.events) {
-    fingers[momentKey(event)] = null;
-    hands[momentKey(event)] = null;
-  }
-  ws.change({ corrections: { fingers, hands } });
-  noteCorrection("corrections here removed");
-});
-try {
-  editor.details.open = localStorage.getItem("musichands-finger-editor") === "open";
-} catch {
-  // Closed, then.
-}
-editor.details.addEventListener("toggle", () => {
-  if (editor.details.open) renderFingerEditor();
-  try {
-    localStorage.setItem("musichands-finger-editor", editor.details.open ? "open" : "closed");
-  } catch {
-    // Not remembered.
-  }
-});
-
-// ---------------------------------------------------------------------------
 // Scores: the workspace's own
 
-// Lists the workspace's scores and marks the one that is open.
+// Lists the workspace's songs in the song dialog and marks the one that is open.
 function showScores() {
   const open = ws?.state?.score;
-  scoreSelect.replaceChildren(
+  songList.replaceChildren(
     ...(ws?.scores ?? []).map((entry) => {
-      const option = document.createElement("option");
-      option.value = entry.id;
-      option.textContent = entry.title;
-      return option;
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "song-list__item";
+      item.setAttribute("role", "listitem");
+      item.setAttribute("aria-current", String(entry.id === open?.id));
+      item.innerHTML = `<strong></strong><span></span>`;
+      item.querySelector("strong").textContent = entry.title;
+      item.querySelector("span").textContent = entry.measures ? `${entry.measures} measures` : "";
+      item.addEventListener("click", () => {
+        if (entry.id !== open?.id) chooseScore(entry);
+        dialogs.song.close();
+      });
+      return item;
     }),
   );
-  scoreSelect.value = open?.id ?? "";
-  libraryActions.hidden = !open;
+  removeScore.hidden = !open;
 }
 
 // Points the workspace at another of its pieces. Corrections are by moment,
@@ -854,10 +615,8 @@ function chooseScore({ id, title }) {
   ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null } });
 }
 
-scoreSelect.addEventListener("change", () => {
-  const entry = ws?.scores.find((known) => known.id === scoreSelect.value);
-  if (entry) chooseScore(entry);
-});
+scoreTitle.addEventListener("click", () => dialogs.song.showModal());
+document.querySelector("#settings-open").addEventListener("click", () => dialogs.settings.showModal());
 
 // Turns a PDF of a score into MusicXML. The reader is only fetched when needed.
 async function readPdfScore(file) {
@@ -870,6 +629,8 @@ async function readPdfScore(file) {
 }
 
 async function importScoreFile(file) {
+  // What the reader makes of the file is told in the song dialog.
+  if (!dialogs.song.open) dialogs.song.showModal();
   setStatus(`Reading ${file.name}`, "idle");
   try {
     let xml;
@@ -886,6 +647,7 @@ async function importScoreFile(file) {
     // What the reader had to guess at is worth saying once the piece is up.
     pendingImportNotes = { id: added.id, notes, doubts };
     chooseScore(added);
+    dialogs.song.close();
   } catch (error) {
     setStatus(`Could not import ${file.name}: ${error.message}`, "outside");
   }
@@ -898,20 +660,8 @@ scoreFile.addEventListener("change", () => {
   scoreFile.value = "";
 });
 
-document.querySelector("#save-score").addEventListener("click", () => {
-  if (!page.xml) return;
-  const url = URL.createObjectURL(new Blob([page.xml], { type: "application/vnd.recordare.musicxml+xml" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `${page.score.title.replace(/[^\w.-]+/g, "-").replace(/^-|-$/g, "") || "score"}.musicxml`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
-
-document.querySelector("#remove-score").addEventListener("click", async () => {
-  const entry = ws?.scores.find((known) => known.id === scoreSelect.value);
+removeScore.addEventListener("click", async () => {
+  const entry = ws?.scores.find((known) => known.id === ws?.state?.score?.id);
   if (!entry || !window.confirm(`Remove “${entry.title}” from your workspace?`)) return;
   try {
     await ws.removeScore(entry.id);
@@ -960,9 +710,7 @@ const player = new HandPlayer({
     page.replay = null;
     showHands({ strike: false });
   },
-  onChange: (mode) => {
-    for (const [name, button] of Object.entries(playButtons)) button.classList.toggle("is-playing", name === mode);
-  },
+  onChange: () => {},
 });
 
 function replay(mode) {
@@ -986,7 +734,6 @@ function replay(mode) {
   player.play(notes, mode);
 }
 
-for (const [mode, button] of Object.entries(playButtons)) button.addEventListener("click", () => replay(mode));
 
 // Playing the score through. The browser leading the workspace runs the
 // transport and writes each step's time back, so every other browser and
@@ -1056,8 +803,8 @@ async function startTransport() {
 function stopTransport() {
   preparationSerial++;
   preparingTransport = null;
-  clearTimeout(detailsTimer);
-  detailsTimer = null;
+  clearTimeout(cursorTimer);
+  cursorTimer = null;
   if (!transport.playing) return;
   transport.stop();
   audio.releaseAll();
@@ -1112,14 +859,6 @@ tempoTicks.addEventListener("click", (event) => {
   if (tick) ws.change({ tempo: Number(tick.dataset.tempo) });
 });
 
-// Which hands to draw and to hear, and whether to number the fingers.
-for (const hand of HANDS) {
-  for (const what of ["show", "sound"]) {
-    const box = document.querySelector(`#${hand}-${what}`);
-    box.addEventListener("change", () => ws.change({ hands: { [hand]: { [what]: box.checked } } }));
-  }
-}
-
 // One hand on its own, or both: seen and heard alike.
 const HAND_SETS = { left: { left: true, right: false }, both: { left: true, right: true }, right: { left: false, right: true } };
 handChoice.addEventListener("click", (event) => {
@@ -1128,18 +867,11 @@ handChoice.addEventListener("click", (event) => {
 });
 
 function showChoices(choices) {
-  for (const hand of HANDS) {
-    const strip = document.querySelector(`.hand-strip[data-hand="${hand}"]`);
-    strip.classList.toggle("is-hidden", !choices[hand].show);
-    strip.classList.toggle("is-silent", !choices[hand].sound);
-    for (const what of ["show", "sound"]) document.querySelector(`#${hand}-${what}`).checked = choices[hand][what];
-  }
   const current = Object.keys(HAND_SETS).find((choice) => HANDS.every((hand) => HAND_SETS[choice][hand] === (choices[hand].show && choices[hand].sound)));
   for (const button of handChoice.querySelectorAll("[data-hands]")) button.setAttribute("aria-pressed", String(button.dataset.hands === current));
 }
 
 numbersToggle.addEventListener("change", () => ws.change({ numbers: numbersToggle.checked }));
-soundToggle.addEventListener("change", () => ws.change({ sound: soundToggle.checked }));
 
 // Clicking a key plays it; if a finger sits on that key, the finger plays it.
 handsStage.addEventListener("noteon", (event) => {
@@ -1174,7 +906,7 @@ window.addEventListener("keydown", (event) => {
   if (target.matches("select, textarea") || (target.matches("input") && !ticks)) return;
   if (target.matches("button, summary, a, input") && (event.key === " " || event.key === "Enter")) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
-  if (!ws?.state) return;
+  if (!ws?.state || document.querySelector("dialog[open]")) return;
   if (event.key === "ArrowRight") goToStep(page.stepIndex + 1);
   else if (event.key === "ArrowLeft") goToStep(page.stepIndex - 1);
   else if (event.key === "Home") goToStep(0);
@@ -1237,7 +969,6 @@ async function applyLatest() {
   const refingered = correctionsKey !== shown.corrections;
   if (refingered) {
     refinger(state.corrections);
-    renderPositionLists();
     shown.corrections = correctionsKey;
   }
 
@@ -1259,7 +990,6 @@ async function applyLatest() {
     shown.numbers = state.numbers;
   }
   if (state.sound !== shown.sound) {
-    soundToggle.checked = state.sound;
     audio.setEnabled(state.sound);
     shown.sound = state.sound;
   }
