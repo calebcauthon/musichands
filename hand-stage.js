@@ -15,12 +15,13 @@ import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { clone as cloneRigged } from "three/addons/utils/SkeletonUtils.js";
 import { cleanView, DRAG_THRESHOLD, dragOrbit, framingDistance, orbitPosition, readView, sameView, ZOOM_STEP, zoomView } from "./camera-orbit.js";
-import { dueForCut, readShots, ShotList } from "./camera-shots.js";
+import { dueForCut, readShots, ShotList, STARTER_SHOTS } from "./camera-shots.js";
 import { FINGER_JOINTS, readSkeleton } from "./glb-skeleton.js";
 import { noteToMidi } from "./hand-model.js";
 import { blendPose, createRig, poseMatrices, solvePose } from "./hand-rig.js";
 import { KEYBOARD, KEYS, keyFor } from "./piano-geometry.js";
 import { mat4 } from "./rig-math.js";
+import { advanceSegments } from "./pose-timeline.js";
 
 const HAND_MODEL_URL = new URL("./assets/hand-right.glb", import.meta.url);
 const SIDES = ["left", "right"];
@@ -43,6 +44,21 @@ const PRESS = 95; // ms for a lifted finger to come down
 const FARTHEST = 1.7; // how many times its starting distance the camera may back away when turned
 const DRIFT = { turn: 1.1, push: 0.012 }; // degrees and share of zoom gained each second within a shot
 const SHOTS_KEY = "musichands-shots";
+const QUALITY_KEY = "musichands-quality";
+// How much work each frame is allowed: the lens and bloom passes, the size of
+// the shadow map, how many device pixels are drawn, and how often.
+export const QUALITY = {
+  full: { label: "Full", pixelRatio: 2, samples: 4, lens: true, bloom: true, shadows: true, softShadows: true, shadowMap: 2048, frameCap: 0 },
+  balanced: { label: "Balanced", pixelRatio: 1.25, samples: 2, lens: false, bloom: true, shadows: true, softShadows: false, shadowMap: 1024, frameCap: 0 },
+  light: { label: "Light", pixelRatio: 0.75, samples: 0, lens: false, bloom: false, shadows: false, softShadows: false, shadowMap: 512, frameCap: 30 },
+};
+const QUALITY_ORDER = ["full", "balanced", "light"];
+const SLOW_FRAME = 40; // ms; frames slower than this for a while mean the level is too much for this machine
+const SLOW_FRAMES = 45;
+
+export function readQuality(text) {
+  return QUALITY[text] ? text : null;
+}
 const AUTO_CUT_KEY = "musichands-auto-cut";
 const CAMERA = { fov: 27, elevation: 72, target: [0.018, -0.002], depth: 0.275, minWidth: 0.5, margin: 0.13 };
 
@@ -279,6 +295,18 @@ function createSkinMaterial(rig) {
   return material;
 }
 
+// Light mode deliberately avoids the physical lobes and the procedural skin
+// shader above. At stage size those details cost far more than they contribute.
+function createLightSkinMaterial() {
+  return new THREE.MeshStandardMaterial({
+    color: COLORS.skin,
+    roughness: 0.58,
+    metalness: 0,
+    emissive: new THREE.Color(0x5a1408),
+    emissiveIntensity: 0.08,
+  });
+}
+
 // A jacket sleeve with a shirt cuff, from the wrist back toward the elbow.
 function createSleeve() {
   const group = new THREE.Group();
@@ -336,7 +364,7 @@ function createSleeve() {
 }
 
 class HandActor {
-  constructor(side, asset, material) {
+  constructor(side, asset, materials) {
     this.side = side;
     this.rig = asset.rig;
     this.mirror = side === "left";
@@ -350,13 +378,15 @@ class HandActor {
     const scene = cloneRigged(asset.scene);
     model.add(scene);
     this.bones = new Map();
+    this.skinMeshes = [];
     scene.traverse((object) => {
       if (object.isBone) {
         object.matrixAutoUpdate = false;
         this.bones.set(object.name, object);
       }
       if (object.isSkinnedMesh) {
-        object.material = material;
+        object.material = materials.full;
+        this.skinMeshes.push(object);
         object.castShadow = true;
         object.receiveShadow = true;
         object.frustumCulled = false;
@@ -364,12 +394,25 @@ class HandActor {
     });
     this.sleeve = createSleeve();
     this.root.add(this.sleeve);
+    this.sleeveMaterials = [];
+    this.sleeve.traverse((object) => {
+      if (!object.isMesh) return;
+      const full = object.material;
+      const light = new THREE.MeshLambertMaterial({ color: full.color, side: full.side });
+      this.sleeveMaterials.push({ object, full, light });
+    });
 
     this.segments = [];
     this.state = null; // { pose, scale }
     this.targets = []; // fingers currently assigned, for badges
     this.balls = {};
     this.key = "";
+    this.materials = materials;
+  }
+
+  setLightMaterial(light) {
+    for (const mesh of this.skinMeshes) mesh.material = light ? this.materials.light : this.materials.full;
+    for (const entry of this.sleeveMaterials) entry.object.material = light ? entry.light : entry.full;
   }
 
   apply(state) {
@@ -394,20 +437,7 @@ class HandActor {
 
   // Advance along the queued moves. Returns true while still moving.
   step(now) {
-    while (this.segments.length) {
-      const segment = this.segments[0];
-      segment.start ??= now;
-      const t = clamp((now - segment.start) / segment.duration, 0, 1);
-      const eased = segment.ease(t);
-      const blended = blendPose(segment.from, segment.to, eased);
-      blended.pose[1] += Math.sin(Math.PI * t) * segment.arc;
-      this.apply(blended);
-      if (t < 1) return true;
-      this.apply({ pose: segment.to.pose.slice(), scale: segment.to.scale });
-      segment.done?.();
-      this.segments.shift();
-    }
-    return false;
+    return advanceSegments(this.segments, now, (state) => this.apply(state), blendPose);
   }
 }
 
@@ -419,6 +449,7 @@ export class HandStage {
     this.hands = {};
     this.requests = { left: null, right: null };
     this.solved = new Map();
+    this.prepared = new Map();
     this.keys = new Map();
     this.held = new Set();
     this.sounding = new Set();
@@ -426,12 +457,14 @@ export class HandStage {
     this.view = { x: 0, width: CAMERA.minWidth };
     // The angle the camera starts from, the angle it is at, and the one it is turning toward.
     this.home = { azimuth: 0, elevation: this.options.elevation ?? CAMERA.elevation, zoom: 1 };
-    this.shots = new ShotList(readShots(window.localStorage?.getItem(SHOTS_KEY)) ?? undefined);
-    this.autoCut = Boolean(this.options.autoCut) && window.localStorage?.getItem(AUTO_CUT_KEY) === "on";
+    // A page that keeps the camera itself (through onCamera) gets no help from local storage.
+    this.kept = typeof this.options.onCamera === "function";
+    this.shots = new ShotList((this.kept ? null : readShots(window.localStorage?.getItem(SHOTS_KEY))) ?? undefined);
+    this.autoCut = Boolean(this.options.autoCut) && !this.kept && window.localStorage?.getItem(AUTO_CUT_KEY) === "on";
     this.rolling = false; // true while music is playing
     this.lastCut = 0;
     this.drift = { azimuth: 0, zoom: 1, turn: 1 }; // slow movement within a shot
-    const stored = this.options.viewKey ? readView(window.localStorage?.getItem(`musichands-view-${this.options.viewKey}`)) : null;
+    const stored = this.options.viewKey && !this.kept ? readView(window.localStorage?.getItem(`musichands-view-${this.options.viewKey}`)) : null;
     this.orbit = { ...(stored ?? this.home) };
     this.orbitGoal = { ...this.orbit };
     this.running = false;
@@ -440,12 +473,21 @@ export class HandStage {
     this.stillOnly = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
     element.classList.add("hand-stage");
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: "high-performance", preserveDrawingBuffer: Boolean(options.snapshot) });
-    this.renderer.setPixelRatio(options.snapshot ? 1 : Math.min(window.devicePixelRatio || 1, 2));
+    // Stills are drawn once, so they can afford the full look; a live stage
+    // uses the level chosen on this machine, or a balanced one until frames
+    // show what it can manage.
+    this.chosenQuality = options.snapshot ? "full" : readQuality(window.localStorage?.getItem(QUALITY_KEY));
+    this.quality = this.chosenQuality ?? (options.snapshot ? "full" : "balanced");
+    this.slowFrames = 0;
+    this.lastRendered = 0;
+    // Multisampling belongs to the composer's render target. Enabling it on
+    // the canvas too wastes memory and made Light's "no MSAA" claim untrue.
+    this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: "high-performance", preserveDrawingBuffer: Boolean(options.snapshot) });
+    this.renderer.setPixelRatio(options.snapshot ? 1 : Math.min(window.devicePixelRatio || 1, QUALITY[this.quality].pixelRatio));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = QUALITY[this.quality].shadows;
+    this.renderer.shadowMap.type = QUALITY[this.quality].softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     this.canvas = this.renderer.domElement;
     this.canvas.className = "hand-stage__canvas";
     element.append(this.canvas);
@@ -454,6 +496,7 @@ export class HandStage {
     element.append(this.overlay);
 
     this.scene = new THREE.Scene();
+    this.qualityMeshes = [];
     this.scene.background = new THREE.Color(COLORS.backdrop);
     this.scene.fog = new THREE.Fog(COLORS.backdrop, 1.2, 3.2);
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -471,9 +514,10 @@ export class HandStage {
     if (!this.options.snapshot) this.bindPointer();
 
     this.ready = loadHandAsset().then((asset) => {
-      const material = createSkinMaterial(asset.rig);
+      const materials = { full: createSkinMaterial(asset.rig), light: createLightSkinMaterial() };
       for (const side of SIDES) {
-        const actor = new HandActor(side, asset, material);
+        const actor = new HandActor(side, asset, materials);
+        actor.setLightMaterial(this.quality === "light");
         this.hands[side] = actor;
         this.scene.add(actor.root);
       }
@@ -492,7 +536,7 @@ export class HandStage {
     const key = new THREE.SpotLight(0xffd9b0, 3.3, 4, Math.PI / 6, 1, 1.6);
     key.position.set(-0.6, 0.5, 0.05);
     key.castShadow = true;
-    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.mapSize.set(QUALITY[this.quality].shadowMap, QUALITY[this.quality].shadowMap);
     key.shadow.camera.near = 0.3;
     key.shadow.camera.far = 2;
     key.shadow.bias = -0.0002;
@@ -538,7 +582,9 @@ export class HandStage {
       const material = key.black
         ? new THREE.MeshPhysicalMaterial({ color: COLORS.ebony, roughness: 0.28, clearcoat: 0.7, clearcoatRoughness: 0.25, emissive: COLORS.gold, emissiveIntensity: 0 })
         : new THREE.MeshPhysicalMaterial({ color: COLORS.ivory, roughness: 0.34, clearcoat: 0.35, clearcoatRoughness: 0.4, emissive: COLORS.gold, emissiveIntensity: 0 });
-      const mesh = new THREE.Mesh(key.black ? blackGeometry : whiteGeometry, material);
+      const lightMaterial = new THREE.MeshLambertMaterial({ color: key.black ? COLORS.ebony : COLORS.ivory, emissive: COLORS.gold, emissiveIntensity: 0 });
+      const mesh = new THREE.Mesh(key.black ? blackGeometry : whiteGeometry, this.quality === "light" ? lightMaterial : material);
+      this.qualityMeshes.push({ mesh, full: material, light: lightMaterial });
       if (key.black) mesh.position.set(0, KEYBOARD.blackRise - blackHeight / 2, KEYBOARD.pivot - KEYBOARD.whiteLength + KEYBOARD.blackLength / 2);
       else mesh.position.set(0, -KEYBOARD.whiteDepth / 2, KEYBOARD.pivot - KEYBOARD.whiteLength / 2);
       mesh.castShadow = true;
@@ -550,11 +596,12 @@ export class HandStage {
         label.rotation.x = -Math.PI / 2;
         label.position.set(0, 0.00012, KEYBOARD.pivot - 0.0135);
         label.receiveShadow = true;
+        label.visible = this.quality !== "light" && this.options.showNotes;
         pivot.add(label);
         this.labelMeshes.push(label);
       }
       piano.add(pivot);
-      this.keys.set(key.midi, { key, pivot, mesh, material, dip: 0, target: 0, delay: 0, glow: 0, glowTarget: 0, tint: 0, tintTarget: 0 });
+      this.keys.set(key.midi, { key, pivot, mesh, material: this.quality === "light" ? lightMaterial : material, fullMaterial: material, lightMaterial, dip: 0, target: 0, delay: 0, glow: 0, glowTarget: 0, tint: 0, tintTarget: 0 });
     }
     this.keyMeshes = [...this.keys.values()].map((entry) => entry.mesh);
 
@@ -594,7 +641,9 @@ export class HandStage {
     );
     mirror.position.set(0, 0.105, -KEYBOARD.whiteLength - 0.0068);
     mirror.rotation.x = -0.08;
+    mirror.visible = this.quality !== "light";
     piano.add(mirror);
+    this.fallboardMirror = mirror;
     const sheen = new THREE.Mesh(
       new THREE.PlaneGeometry(width + 0.2, 0.2),
       new THREE.MeshPhysicalMaterial({ color: 0x000000, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.1, transparent: true, opacity: 0.35 }),
@@ -602,7 +651,9 @@ export class HandStage {
     sheen.position.copy(mirror.position);
     sheen.position.z += 0.0004;
     sheen.rotation.copy(mirror.rotation);
+    sheen.visible = this.quality !== "light";
     piano.add(sheen);
+    this.fallboardSheen = sheen;
     const top = new THREE.Mesh(new RoundedBoxGeometry(width + 0.2, 0.02, 0.12, 3, 0.004), lacquer);
     top.position.set(0, 0.212, -KEYBOARD.whiteLength - 0.075);
     piano.add(top);
@@ -649,17 +700,87 @@ export class HandStage {
   }
 
   buildComposer() {
-    const target = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: 4 });
+    const level = QUALITY[this.quality];
+    this.composer?.dispose();
+    this.composer = null;
+    this.lens = null;
+    this.bloom = null;
+    // With no image effects, rendering through half-float ping-pong targets
+    // adds two full-screen copies for no visual benefit.
+    if (!level.lens && !level.bloom) return;
+    const target = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, samples: level.samples });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     // A wide lens held close: the hands are sharp, the far keys and the sleeves fall soft.
     this.lens = new BokehPass(this.scene, this.camera, { focus: 0.6, aperture: this.options.aperture ?? 0.002, maxblur: 0.0045 });
+    this.lens.enabled = level.lens;
     this.composer.addPass(this.lens);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(4, 4), 0.18, 0.6, 1.0);
+    this.bloom.enabled = level.bloom;
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
     this.finish = new ShaderPass(FinishShader);
     this.composer.addPass(this.finish);
+    if (this.width) this.composer.setSize(this.width, this.height);
+  }
+
+  // Changes how much work each frame does. A level the player picks is kept
+  // for next time; one the stage falls back to on its own is not.
+  setQuality(name, { chosen = true } = {}) {
+    const level = QUALITY[name];
+    if (!level) return;
+    if (chosen) {
+      this.chosenQuality = name;
+      try {
+        window.localStorage?.setItem(QUALITY_KEY, name);
+      } catch {
+        // Not remembered.
+      }
+    }
+    if (name !== this.quality) {
+      this.quality = name;
+      this.slowFrames = 0;
+      this.renderer.setPixelRatio(this.options.snapshot ? 1 : Math.min(window.devicePixelRatio || 1, level.pixelRatio));
+      this.renderer.setSize(this.width, this.height, false);
+      this.renderer.shadowMap.enabled = level.shadows;
+      this.renderer.shadowMap.type = level.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+      this.renderer.shadowMap.needsUpdate = true;
+      this.keyLight.shadow.mapSize.set(level.shadowMap, level.shadowMap);
+      this.keyLight.shadow.map?.dispose();
+      this.keyLight.shadow.map = null;
+      if (this.fallboardMirror) this.fallboardMirror.visible = name !== "light";
+      if (this.fallboardSheen) this.fallboardSheen.visible = name !== "light";
+      for (const entry of this.qualityMeshes) entry.mesh.material = name === "light" ? entry.light : entry.full;
+      for (const entry of this.keys.values()) entry.material = name === "light" ? entry.lightMaterial : entry.fullMaterial;
+      for (const label of this.labelMeshes) label.visible = name !== "light" && this.options.showNotes;
+      for (const actor of Object.values(this.hands)) actor.setLightMaterial(name === "light");
+      // Materials bake the shadow settings into their shaders.
+      this.scene.traverse((object) => {
+        if (object.material) object.material.needsUpdate = true;
+      });
+      this.buildComposer();
+    }
+    this.showQuality();
+    this.invalidate();
+  }
+
+  // Too many slow frames in a row: take a step down, unless the player chose this level.
+  noteFrame(delta, moving) {
+    if (!moving || this.chosenQuality || this.options.snapshot) return;
+    this.slowFrames = delta > SLOW_FRAME ? this.slowFrames + 1 : 0;
+    if (this.slowFrames < SLOW_FRAMES) return;
+    const next = QUALITY_ORDER[QUALITY_ORDER.indexOf(this.quality) + 1];
+    if (next) {
+      console.info(`MusicHands: frames are falling behind, so the stage is dropping to the ${QUALITY[next].label.toLowerCase()} detail level.`);
+      this.setQuality(next, { chosen: false });
+    }
+    this.slowFrames = 0;
+  }
+
+  showQuality() {
+    if (!this.qualitySelect) return;
+    this.qualitySelect.value = this.quality;
+    this.qualitySelect.title = this.chosenQuality ? "How much detail the picture has; less is easier on this computer" : `Detail level, chosen for this computer as it goes: ${QUALITY[this.quality].label.toLowerCase()}`;
   }
 
   resize() {
@@ -669,7 +790,7 @@ export class HandStage {
     this.width = width;
     this.height = height;
     this.renderer.setSize(width, height, false);
-    this.composer.setSize(width, height);
+    this.composer?.setSize(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.frameCamera(true);
@@ -679,10 +800,11 @@ export class HandStage {
   setOptions(options) {
     const before = JSON.stringify([this.options.curl, this.options.lift, this.options.scale]);
     Object.assign(this.options, options);
-    for (const label of this.labelMeshes) label.visible = this.options.showNotes;
+    for (const label of this.labelMeshes) label.visible = this.quality !== "light" && this.options.showNotes;
     this.overlay.hidden = !this.options.showBadges;
     if (before !== JSON.stringify([this.options.curl, this.options.lift, this.options.scale])) {
       this.solved.clear();
+      this.prepared.clear();
       for (const side of SIDES) if (this.requests[side]) this.place(side, { ...this.requests[side], strike: false }, { settle: true });
     }
     this.invalidate();
@@ -699,6 +821,10 @@ export class HandStage {
   // the strike is timed to land that many milliseconds from now: the hands
   // wait if that is more time than they need, and hurry if it is less.
   setHands(specs, { immediate = false, landIn = null } = {}) {
+    const asked = performance.now();
+    // Take the old move to the current clock before replacing it, even if no
+    // animation frame was drawn between these two fast notes.
+    for (const actor of Object.values(this.hands)) actor.step(asked);
     if (this.stillOnly) immediate = true;
     for (const side of SIDES) {
       const spec = specs[side];
@@ -726,6 +852,7 @@ export class HandStage {
       let [lag, fall, press] = [KEY_LAG, KEY_FALL, PRESS].map((ms) => ms / this.options.speed);
       let wait = 0;
       if (landIn !== null) {
+        landIn = Math.max(0, landIn - (performance.now() - asked));
         const natural = travel + lag + fall;
         if (landIn < natural) {
           const squeeze = Math.max(landIn, 24) / natural;
@@ -743,6 +870,10 @@ export class HandStage {
         for (const midi of plan.keys) this.keys.get(midi).delay = down;
       }
       landing = wait + travel + lag + fall;
+    }
+    const start = performance.now();
+    for (const actor of Object.values(this.hands)) {
+      if (actor.segments.length) actor.segments[0].start ??= start;
     }
     this.frameCamera(immediate);
     this.invalidate();
@@ -763,9 +894,13 @@ export class HandStage {
     this.invalidate();
   }
 
-  solve(side, request, states) {
+  solve(side, request, states, pin = false) {
     const id = `${side}|${request.fingers.map((entry) => `${entry.finger}:${entry.note}:${states[entry.finger] ?? "rest"}`).join(",")}`;
-    if (this.solved.has(id)) return this.solved.get(id);
+    const cached = this.prepared.get(id) ?? this.solved.get(id);
+    if (cached) {
+      if (pin) this.prepared.set(id, cached);
+      return cached;
+    }
     const rig = this.hands[side].rig;
     const mirror = side === "left";
     const targets = request.fingers.map((entry) => {
@@ -782,8 +917,60 @@ export class HandStage {
     const moved = Object.values(states).some((state) => state !== "rest");
     const result = moved ? solvePose(rig, targets, { ...options, from: base }) : base;
     this.solved.set(id, result);
-    if (this.solved.size > 600) this.solved.delete(this.solved.keys().next().value);
+    if (pin) this.prepared.set(id, result);
+    if (this.solved.size > 4000) this.solved.delete(this.solved.keys().next().value);
     return result;
+  }
+
+  // Solve every pose a score will need while the player is still reading the
+  // page. Doing inverse kinematics on the note's deadline causes audible and
+  // visible stalls in dense passages, even when rendering itself is cheap.
+  prepareHands(specs) {
+    const generation = (this.prepareGeneration ?? 0) + 1;
+    this.prepareGeneration = generation;
+    this.prepared.clear();
+    const jobs = [];
+    const seen = new Set();
+    for (const hands of specs) {
+      for (const side of SIDES) {
+        const request = hands[side];
+        if (!request || !this.hands[side]) continue;
+        const active = new Set(request.activeMidis ?? []);
+        const struck = request.strikeMidis ? new Set(request.strikeMidis) : active;
+        const pressed = {};
+        const lifted = {};
+        for (const entry of request.fingers) {
+          const midi = noteToMidi(entry.note);
+          if (!active.has(midi)) continue;
+          pressed[entry.finger] = "pressed";
+          lifted[entry.finger] = struck.has(midi) ? "lifted" : "pressed";
+        }
+        for (const states of [pressed, lifted]) {
+          const key = `${side}|${request.fingers.map((entry) => `${entry.finger}:${entry.note}`).join(",")}|${JSON.stringify(states)}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            jobs.push(() => this.solve(side, request, states, true));
+          }
+        }
+      }
+    }
+    return new Promise((resolve) => {
+      const run = (deadline) => {
+        if (generation !== this.prepareGeneration) return resolve(false);
+        // One job is always allowed so browsers with a stingy idle budget
+        // still make progress; after that, yield before interaction suffers.
+        let worked = false;
+        const started = performance.now();
+        while (jobs.length && (!worked || (performance.now() - started < 6 && deadline?.timeRemaining?.() > 2))) {
+          jobs.shift()();
+          worked = true;
+        }
+        if (!jobs.length) return resolve(true);
+        if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 100 });
+        else window.setTimeout(() => run(null), 0);
+      };
+      run({ timeRemaining: () => 0 });
+    });
   }
 
   // Queues the move to a request. When fingers are about to strike, returns
@@ -999,13 +1186,36 @@ export class HandStage {
       this.aimCamera();
     }
     this.showCameraState();
-    if (remember && this.options.viewKey) {
+    if (remember && this.kept) this.options.onCamera({ view: cleanView(this.orbitGoal) });
+    else if (remember && this.options.viewKey) {
       try {
         window.localStorage?.setItem(`musichands-view-${this.options.viewKey}`, JSON.stringify(this.orbitGoal));
       } catch {
         // The view is simply not remembered.
       }
     }
+    this.invalidate();
+  }
+
+  // The camera as a page keeps it: where it looks, the saved views, and whether it cuts on its own.
+  get cameraState() {
+    return { view: cleanView(this.orbitGoal), shots: this.shots.views.map((view) => ({ ...view })), autoCut: this.autoCut };
+  }
+
+  // Takes the camera state a page keeps, without reporting it back.
+  applyCamera({ view, shots, autoCut } = {}, { immediate = false } = {}) {
+    if (view && !sameView(view, this.orbitGoal)) this.setView(view, { immediate, remember: false });
+    const wanted = shots ?? STARTER_SHOTS;
+    if (JSON.stringify(wanted) !== JSON.stringify(this.shots.views)) {
+      this.shots = new ShotList(wanted);
+      if (this.shotRail) this.showShots();
+    }
+    if (typeof autoCut === "boolean" && autoCut !== this.autoCut) {
+      this.autoCut = autoCut;
+      this.drift = { azimuth: 0, zoom: 1, turn: this.drift.turn };
+      this.aimCamera();
+    }
+    this.showCameraState();
     this.invalidate();
   }
 
@@ -1055,15 +1265,33 @@ export class HandStage {
   }
 
   tick(now) {
-    const delta = Math.max(0, Math.min(50, now - this.lastTime));
+    const cap = QUALITY[this.quality].frameCap;
+    const due = !cap || now - this.lastRendered >= 1000 / cap - 2;
+    // Capping only the draw still did all pose solving and scene updates at the
+    // display refresh rate. Light caps the whole animation workload instead.
+    if (!due) {
+      requestAnimationFrame((next) => this.tick(next));
+      return;
+    }
+    const raw = now - this.lastTime;
+    const delta = Math.max(0, Math.min(50, raw));
     this.lastTime = now;
     let moving = false;
     try {
       moving = this.stepKeys(now, delta);
-      for (const side of SIDES) if (this.hands[side]?.step(now)) moving = true;
+      for (const side of SIDES) {
+        const actor = this.hands[side];
+        if (actor?.segments.length) this.needsRender = true;
+        if (actor?.step(now)) moving = true;
+      }
       if (this.stepCamera(delta)) moving = true;
-      if (moving || this.needsRender) this.render();
-      this.needsRender = false;
+      // A capped frame rate lets the motion run on while drawing fewer pictures of it.
+      if ((moving || this.needsRender) && due) {
+        this.render();
+        this.lastRendered = now;
+        this.needsRender = false;
+      }
+      this.noteFrame(raw, moving);
     } finally {
       // Never leave the loop marked as running if a frame fails.
       this.running = moving;
@@ -1072,7 +1300,8 @@ export class HandStage {
   }
 
   render() {
-    this.composer.render();
+    if (this.composer) this.composer.render();
+    else this.renderer.render(this.scene, this.camera);
     this.updateBadges();
   }
 
@@ -1085,8 +1314,8 @@ export class HandStage {
   }
 
   // Copy the current picture, finger numbers included, onto a 2D canvas.
-  paintTo(canvas) {
-    this.render();
+  paintTo(canvas, { render = true } = {}) {
+    if (render) this.render();
     const context = canvas.getContext("2d");
     context.drawImage(this.canvas, 0, 0, canvas.width, canvas.height);
     const scale = canvas.width / this.width;
@@ -1194,6 +1423,17 @@ export class HandStage {
     this.autoButton = button("camera-button camera-auto", "Auto cut", "Cut between your saved views as the music plays", () => this.setAutoCut(!this.autoCut));
     this.autoButton.hidden = !this.options.autoCut;
     this.resetButton = button("camera-button hand-stage__reset", "Reset view", "Put the camera back where it started", () => this.setView());
+    this.qualitySelect = document.createElement("select");
+    this.qualitySelect.className = "camera-button camera-quality";
+    this.qualitySelect.setAttribute("aria-label", "Detail level");
+    for (const [name, level] of Object.entries(QUALITY)) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = `${level.label} detail`;
+      this.qualitySelect.append(option);
+    }
+    this.qualitySelect.addEventListener("change", () => this.setQuality(this.qualitySelect.value));
+    this.showQuality();
     this.cameraBar.append(
       group(
         "camera-zoom",
@@ -1202,7 +1442,7 @@ export class HandStage {
       ),
       this.shotRail,
       this.saveButton,
-      group("camera-right", this.autoButton, this.resetButton),
+      group("camera-right", this.qualitySelect, this.autoButton, this.resetButton),
     );
     this.element.append(this.cameraBar);
     this.showShots();
@@ -1242,6 +1482,7 @@ export class HandStage {
         return chip;
       }),
     );
+    if (this.kept) return;
     try {
       window.localStorage?.setItem(SHOTS_KEY, JSON.stringify(this.shots.views));
     } catch {
@@ -1258,12 +1499,14 @@ export class HandStage {
     if (index === -1) return;
     this.showShots();
     this.showCameraState();
+    if (this.kept) this.options.onCamera({ shots: this.shots.views });
   }
 
   removeShot(index) {
     this.shots.remove(index);
     this.showShots();
     this.showCameraState();
+    if (this.kept) this.options.onCamera({ shots: this.shots.views });
   }
 
   goToShot(index, { cut = false } = {}) {
@@ -1277,10 +1520,13 @@ export class HandStage {
   setAutoCut(on) {
     this.autoCut = Boolean(on);
     this.drift = { azimuth: 0, zoom: 1, turn: this.drift.turn };
-    try {
-      window.localStorage?.setItem(AUTO_CUT_KEY, this.autoCut ? "on" : "off");
-    } catch {
-      // Not remembered.
+    if (this.kept) this.options.onCamera({ autoCut: this.autoCut });
+    else {
+      try {
+        window.localStorage?.setItem(AUTO_CUT_KEY, this.autoCut ? "on" : "off");
+      } catch {
+        // Not remembered.
+      }
     }
     this.showCameraState();
     this.aimCamera();
@@ -1289,6 +1535,7 @@ export class HandStage {
 
   // Tell the stage whether music is playing, so the camera knows when to move on its own.
   setRolling(rolling) {
+    if (this.rolling === Boolean(rolling)) return;
     this.rolling = Boolean(rolling);
     if (!this.rolling && (this.drift.azimuth !== 0 || this.drift.zoom !== 1)) {
       // Settle on the shot as it was saved.
@@ -1312,7 +1559,10 @@ export class HandStage {
 
   dispose() {
     this.resizeObserver.disconnect();
+    this.composer?.dispose();
+    this.scene.environment?.dispose();
     this.renderer.dispose();
+    this.renderer.forceContextLoss();
     this.canvas.remove();
     this.overlay.remove();
     this.cameraBar?.remove();
@@ -1322,7 +1572,7 @@ export class HandStage {
 // Draws small stills of single hand positions, one shared renderer for all of
 // them, and only once a picture has scrolled into view.
 export class ThumbnailRenderer {
-  constructor({ width = 480, height = 240 } = {}) {
+  constructor({ width = 320, height = 160 } = {}) {
     this.width = width;
     this.height = height;
     this.stage = null;
@@ -1353,26 +1603,35 @@ export class ThumbnailRenderer {
     this.observer.observe(canvas);
   }
 
+  setPaused(paused) {
+    this.paused = Boolean(paused);
+    if (!this.paused) this.drain();
+  }
+
   async drain() {
-    if (this.busy || !this.queue.length) return;
+    if (this.paused || this.busy || !this.queue.length) return;
     this.busy = true;
     if (!this.stage) {
       const holder = document.createElement("div");
       this.stage = new HandStage(holder, { snapshot: true, width: this.width, height: this.height, minWidth: 0.3, depth: 0.22, targetZ: 0.0, badgeScale: 1.25 });
       await this.stage.ready;
     }
-    while (this.queue.length) {
+    while (this.queue.length && !this.paused) {
       const canvas = this.queue.shift();
       const job = this.jobs.get(canvas);
       if (!job || !canvas.isConnected) continue;
       for (const side of SIDES) this.stage.requests[side] = null;
       this.stage.requests[job.hand] = { fingers: job.fingers, activeMidis: [], strike: false };
       this.stage.renderNow();
-      this.stage.paintTo(canvas);
+      this.stage.paintTo(canvas, { render: false });
       canvas.dataset.ready = "true";
-      // Leave the page room to breathe between pictures.
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+      // Thumbnail work is decorative; never compete with live interaction.
+      await new Promise((resolve) => (window.requestIdleCallback ? window.requestIdleCallback(resolve, { timeout: 500 }) : requestAnimationFrame(resolve)));
     }
+    // The copied canvases are ordinary bitmaps. Keeping this second, full-look
+    // WebGL context alive retained all of its HDR targets and textures forever.
+    this.stage.dispose();
+    this.stage = null;
     this.busy = false;
   }
 }

@@ -8,7 +8,7 @@ A browser prototype that shows where your hands go on a piano: a rigged 3D hand,
 npm run dev
 ```
 
-Then open the address it prints, normally <http://localhost:4173>. If that port is taken it uses the next free one. The pages use ES modules and fetch their assets, so they need a server; opening the HTML files directly will not work.
+Then open the address it prints, normally <http://localhost:4173>; if that port is taken it uses the next free one. `npm run dev` (or `make dev`, `make dev PORT=5000`) runs `server.js`, which serves the app and keeps workspaces under `./data` (git-ignored). If that port is taken it uses the next free one. The pages use ES modules and fetch their assets, so they need a server; opening the HTML files directly will not work.
 
 The front page is the sheet music view. The hand position studio, for shaping a single hand position finger by finger, is at `/studio.html` and is linked from the front page.
 
@@ -28,8 +28,9 @@ The front page is the sheet music view. The hand position studio, for shaping a 
 - `piano-geometry.js` lays out a real keyboard in metres, including the offset black keys and the narrow strip of white key between them.
 - `hand-stage.js` is the three.js scene: keys that dip and glow, lighting, the fallboard reflection, skin shading with nails, knuckle wrinkles and tendons, depth of field, and the camera that follows the hands.
 - `piano-audio.js` plays the recordings in `assets/piano/` through the Web Audio API, shifting the nearest recording to the note asked for, and falls back to a synthesised tone if they cannot be loaded. `hand-player.js` sequences notes through the hand and the piano together.
-- The camera turns: drag on the stage to orbit the hands, and "Reset view" or a double-click below the keys goes back. A press that does not move is still a click on a key. Shift-drag or right-drag turns from anywhere without playing the key under the pointer. Each page remembers its angle. `camera-orbit.js` holds the geometry.
-- The camera bar along the bottom of the stage moves the camera closer or farther (− and +), saves the current position as a numbered view, and goes back to any saved view. Up to nine are kept, shared by both pages; four come ready-made. On the sheet page "Auto cut" cuts to the next saved view at the start of a measure, once a shot has been held for about three seconds, and lets the camera creep slowly within each shot while the score plays. `camera-shots.js` holds the list and the timing.
+- The camera turns: drag on the stage to orbit the hands, and "Reset view" or a double-click below the keys goes back. A press that does not move is still a click on a key. Shift-drag or right-drag turns from anywhere without playing the key under the pointer. The sheet page keeps the camera in its workspace; the studio remembers its angle in the browser. `camera-orbit.js` holds the geometry.
+- The camera bar along the bottom of the stage moves the camera closer or farther (− and +), saves the current position as a numbered view, and goes back to any saved view. Up to nine are kept; four come ready-made. On the sheet page "Auto cut" cuts to the next saved view at the start of a measure, once a shot has been held for about three seconds, and lets the camera creep slowly within each shot while the score plays. `camera-shots.js` holds the list and the timing.
+- **Detail** (the select in the camera bar) sets how hard the stage works: *Full* is the cinematic look with depth of field, bloom, soft 2048-pixel shadows and up to 2× device pixels; *Balanced* drops the depth of field and halves the shadow map; *Light* draws without shadows or post-processing at 1× and caps the frame rate at 30. The choice is remembered on this machine. Until one is chosen the stage starts balanced and steps down on its own when frames keep falling behind (it says so in the console). Nothing is drawn while nothing moves.
 - `hand-view.js` picks the 3D stage when WebGL 2 and three.js are available and falls back to the flat SVG drawing in `hand-keyboard.js` when they are not.
 
 [three.js](https://threejs.org/) 0.170 is loaded from a CDN through the import map in each page.
@@ -48,19 +49,29 @@ The front page shows a whole piece with hand positions. (`/sheet.html`, its old 
 
 **Play** runs the piece from where you are, at the tempo on the slider, with both hands landing on the beat; P does the same. The tempo starts at the score's own. **Reflexes** sets how quickly the hands move and strike, so stepping by hand can keep up with a fast piece. While playing, the hands always keep time: if the tempo leaves less room than the reflexes want, they hurry. `score-transport.js` does the timing.
 
-**Fingering at this moment**, above the stage, lets you correct the fingering: pick a different finger for any note the hands are on. With "Everywhere these same notes recur" ticked, the change also applies wherever that hand plays exactly those notes. A correction beats a fingering printed in the score. Corrections are saved on the server under the score's content (`corrections.js`, and the `/api/fingerings` route in `server.js`), so the same file opened in any browser gets them. The server can require an editing key (the `EDIT_KEY` variable); the page asks for it once and remembers it. Corrections live under `DATA_DIR` (default `./data`), one JSON file per score, in the same shape as the sidecar files.
+**Fingering at this moment**, above the stage, lets you correct the fingering: pick a different finger for any note the hands are on, or press ⇄ to give the note to the other hand (↩ gives it back). With "Everywhere these same notes recur" ticked, the change also applies wherever that hand plays exactly those notes. A correction beats a fingering printed in the score. Corrections belong to the workspace (below), so everyone looking at it sees them; duplicate the workspace to try another set. `corrections.js` applies hand moves and builds the correction maps.
 
-Each hand has its own **Show** and **Sound** boxes under the stage. A hidden hand is not drawn, but its keys still go down and light up, so you can see what it would play; a silenced hand is drawn but not heard. **Finger numbers** (N) shows or hides the numbers over the keys. These choices are remembered. `hand-choices.js` works out what is drawn and heard.
+Each hand has its own **Show** and **Sound** boxes under the stage. A hidden hand is not drawn, but its keys still go down and light up, so you can see what it would play; a silenced hand is drawn but not heard. **Finger numbers** (N) shows or hides the numbers over the keys. `hand-choices.js` works out what is drawn and heard.
 
 A note tied over from before is held, not played again: its finger stays down, its key stays down, and the sound that started the tie rings through it. Only the notes that are not tied over are struck.
 
 Step through the piece with the arrow keys or the Next button, click a measure in the score, or click a position card to jump. Each step sounds the notes struck at that moment. Space replays the moment together, Shift + Space one note at a time, and the Sound switch turns it all off.
 
-Scores live in `scores/`. The two that come with the app, both versions of Minor Descent, were written for it. Bring in anything else with "Import a score…"; imported scores stay in your browser and are not part of this repository.
+Scores live in `scores/`. The two that come with the app, both versions of Minor Descent, were written for it. Bring in anything else with "Import a score…"; imported scores go to the server's data folder and are not part of this repository.
+
+## Workspaces and agents
+
+Everything the sheet page shows is a **workspace**: a small JSON document on the server holding the score, the moment on screen, tempo, reflexes, whether it is playing, the camera (view, saved shots, auto cut), which hands are drawn and heard, finger numbers, sound, and every correction. The page only projects it. Reload and it is all still there; open the same link in another browser and both show the same thing and move together; the longest-connected browser plays the music for the others.
+
+The bar under the title names the workspace and lets you make a new one, duplicate the current one (corrections included), switch between the ones this browser has opened, or open one from its link. A workspace's link is `/#ws=<id>&token=<token>`; the token is the only credential, and it opens only that workspace.
+
+**Copy agent connection string** puts on the clipboard everything an agent needs: the site, the workspace id and token, and a link to the manual. Paste it into whatever agent you run — there is no chat box or model in the app — and ask it to look at what you are looking at. The manual, [`agent.md`](./agent.md) (served at `/agent.md`), covers the API: `GET /api/workspaces/<id>/screen` for what is on screen, `PATCH /api/workspaces/<id>` for changes (any field, including corrections such as `{"corrections":{"hands":{"5:2.5":{"C4":"right"}}}}`), `POST …/commands` to play or stop, a server-sent-events stream for following along, `POST /api/scores` to upload a piece, and `POST /api/workspaces` to make more.
+
+`workspace-model.js` is the state's shape, cleaning and merging, and the screen projection; `workspace-client.js` is the page's side (events stream, batched patches); `server.js` keeps workspaces as `data/workspaces/<id>.json` and uploaded scores as `data/scores/<hash>.musicxml`.
 
 ## Importing scores
 
-"Import a score…" on the sheet page takes a PDF, MusicXML or MXL file; so does dropping one anywhere on the page. Imported scores are kept in the browser (IndexedDB) and listed under "Your scores". "Save MusicXML" writes the current one out as a file, which is also the way to correct a misread score in a notation program and bring it back.
+"Import a score…" on the sheet page takes a PDF, MusicXML or MXL file; so does dropping one anywhere on the page. The piece is sent to the server (`POST /api/scores`, addressed by content hash) and the workspace is pointed at it; the browser lists what it has uploaded under "Your uploads". "Save MusicXML" writes the current one out as a file, which is also the way to correct a misread score in a notation program and bring it back.
 
 ### PDFs
 
@@ -77,9 +88,9 @@ A measure whose notes do not add up to the time signature is named in the status
 
 ## Deploying
 
-The app is only files, so any host that can serve them will do. `npm start` runs `server.js`, a small server with no dependencies that listens on `$PORT` and serves nothing but the app's own files.
+`npm start` runs `server.js`, a server with no dependencies that listens on `$PORT`, serves the app's own files and nothing else, and keeps workspaces and uploaded scores under `DATA_DIR` (default `./data`). Set `PUBLIC_URL` if the site is reached through a different address from the one the server sees.
 
-It runs on [Railway](https://railway.com/) at <https://musichands-production.up.railway.app>, with a volume mounted at `/data` for the corrections and `DATA_DIR` and `EDIT_KEY` set on the service. To put out a new version, run `railway up --service musichands` from this folder.
+It runs on [Railway](https://railway.com/) at <https://musichands-production.up.railway.app>, with a volume mounted at `/data` and `DATA_DIR=/data` set on the service. To put out a new version, run `railway up --service musichands` from this folder.
 
 ## Tests
 

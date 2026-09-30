@@ -36,6 +36,36 @@ export function withCorrection(overrides, moments, hand, note, finger) {
   return next;
 }
 
+// Moves notes to the other hand: `moves` is { "measure:beat": { note: hand } }.
+// Returns new events, in time order, with a hand's event created or dropped
+// as notes come and go.
+export function applyHandMoves(events, moves) {
+  if (!moves || !Object.keys(moves).length) return events;
+  const out = events.map((event) => ({ ...event, notes: [...event.notes] }));
+  const find = (hand, time) => out.find((event) => event.hand === hand && Math.abs(event.time - time) < 1e-6);
+  for (const event of [...out]) {
+    const wanted = moves[momentKey(event)];
+    if (!wanted) continue;
+    for (const note of [...event.notes]) {
+      const hand = wanted[note.note];
+      if (!hand || hand === event.hand) continue;
+      event.notes = event.notes.filter((entry) => entry !== note);
+      let target = find(hand, event.time);
+      if (!target) {
+        target = { ...event, hand, notes: [], duration: 0, attack: false };
+        out.push(target);
+      }
+      if (!target.notes.some((entry) => entry.midi === note.midi)) target.notes.push(note);
+      target.duration = Math.max(target.duration, note.duration ?? event.duration);
+      if (!note.held) target.attack = true;
+    }
+  }
+  return out
+    .filter((event) => event.notes.length)
+    .map((event) => ({ ...event, attack: event.notes.some((note) => !note.held), notes: [...event.notes].sort((a, b) => a.midi - b.midi) }))
+    .sort((a, b) => a.time - b.time || (a.hand === "right" ? -1 : 1));
+}
+
 export function countCorrections(overrides) {
   let count = 0;
   for (const [key, hands] of Object.entries(overrides ?? {})) {
@@ -43,59 +73,4 @@ export function countCorrections(overrides) {
     for (const notes of Object.values(hands)) count += Object.keys(notes).length;
   }
   return count;
-}
-
-// Talks to the server. `askForKey` is called when the server wants an editing
-// key and returns one, or null to give up.
-export class CorrectionStore {
-  constructor({ base = "", askForKey = async () => null } = {}) {
-    this.base = base;
-    this.askForKey = askForKey;
-    this.available = null; // null until the first answer from the server
-  }
-
-  get key() {
-    return localStorage.getItem("musichands-edit-key") ?? "";
-  }
-
-  set key(value) {
-    if (value) localStorage.setItem("musichands-edit-key", value);
-    else localStorage.removeItem("musichands-edit-key");
-  }
-
-  async load(id) {
-    try {
-      const response = await fetch(`${this.base}/api/fingerings/${id}`, { cache: "no-store" });
-      this.available = response.ok || response.status === 404;
-      if (!response.ok) return {};
-      return await response.json();
-    } catch {
-      this.available = false;
-      return {};
-    }
-  }
-
-  // Saves the whole map. Returns true when the server has it. If the server
-  // wants a key, the player is asked, and asked again after a wrong one.
-  async save(id, overrides) {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      let response;
-      try {
-        response = await fetch(`${this.base}/api/fingerings/${id}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json", "x-edit-key": this.key },
-          body: JSON.stringify(overrides),
-        });
-      } catch {
-        return false;
-      }
-      if (response.ok) return true;
-      if (response.status !== 401 && response.status !== 403) return false;
-      // The server wants a key: ask once, then try again with it.
-      const key = await this.askForKey(attempt > 0 || this.key !== "");
-      if (!key) return false;
-      this.key = key;
-    }
-    return false;
-  }
 }

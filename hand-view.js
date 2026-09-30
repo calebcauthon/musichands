@@ -16,6 +16,10 @@ class StageView {
     return this.stage.setHands(hands, { immediate, landIn });
   }
 
+  prepareHands(specs) {
+    return this.stage.prepareHands(specs);
+  }
+
   // How many times faster than usual the hands move.
   setSpeed(speed) {
     this.stage.setOptions({ speed });
@@ -30,6 +34,7 @@ class StageView {
   // to cut between saved views.
   setRolling(rolling) {
     this.stage.setRolling(rolling);
+    this.thumbnails.setPaused(rolling);
   }
 
   beat(moment) {
@@ -42,6 +47,15 @@ class StageView {
 
   toggleAutoCut() {
     this.stage.setAutoCut(!this.stage.autoCut);
+  }
+
+  // The camera as data: { view, shots, autoCut }, given and taken whole.
+  get camera() {
+    return this.stage.cameraState;
+  }
+
+  setCamera(camera, options) {
+    this.stage.applyCamera(camera, options);
   }
 
   setSounding(midis, timing) {
@@ -109,6 +123,10 @@ class FlatView {
     return 0;
   }
 
+  prepareHands() {
+    return Promise.resolve(true);
+  }
+
   setSounding(midis) {
     this.sounding = [...midis];
     this.single?.setActiveMidis(this.sounding);
@@ -126,6 +144,12 @@ class FlatView {
   goToShot() {}
 
   toggleAutoCut() {}
+
+  get camera() {
+    return null;
+  }
+
+  setCamera() {}
 
   setNumbers(show) {
     this.setOptions({ ...this.options, showGuides: show });

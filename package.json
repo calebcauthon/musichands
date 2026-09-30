@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "python3 serve.py 4173",
+    "dev": "node server.js 4173 --find-port",
     "start": "node server.js",
     "test": "node --test"
   },

@@ -131,6 +131,27 @@ export class PianoAudio {
     if (!enabled) this.releaseAll();
   }
 
+  async prepare() {
+    if (!this.enabled || !this.wake()) return;
+    await Promise.all([this.started, ...SAMPLES.map((sample) => this.decode(sample.name))]);
+  }
+
+  cancelScheduled() {
+    if (!this.context) return;
+    for (const voice of this.voices) {
+      if (voice.startAt <= this.context.currentTime) continue;
+      voice.cancelled = true;
+      this.voices.delete(voice);
+      if (voice.nodes) {
+        voice.nodes.gain.disconnect();
+        try {
+          voice.nodes.source.stop();
+          for (const extra of voice.nodes.extras) extra.stop();
+        } catch { /* Already stopped. */ }
+      }
+    }
+  }
+
   // delay and duration are in milliseconds. Without a duration the note rings
   // until noteOff, or until the string dies away on its own.
   noteOn(midi, { delay = 0, velocity = 0.75, duration = null } = {}) {

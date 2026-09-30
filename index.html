@@ -29,11 +29,35 @@
         </p>
       </header>
 
+      <section class="workspace-bar" aria-label="Workspace">
+        <label class="field field--inline">
+          <span>Workspace</span>
+          <select id="workspace-select" title="Workspaces this browser has opened"></select>
+        </label>
+        <input id="workspace-name" class="workspace-name" type="text" maxlength="80" aria-label="Workspace name" title="Name this workspace" />
+        <div class="workspace-actions" role="group" aria-label="Workspaces">
+          <button class="button" type="button" id="workspace-new" title="Start a fresh workspace">New</button>
+          <button class="button" type="button" id="workspace-copy" title="Copy this workspace, corrections and all, to try something else">Duplicate</button>
+          <button class="button" type="button" id="workspace-open" title="Open a workspace from a link or connection string">Open…</button>
+          <button class="button button--primary" type="button" id="workspace-connect" title="Copy everything an agent needs to see and change this screen">Copy agent connection string</button>
+          <a class="crumb" href="./agent.md" target="_blank" rel="noopener">Agent manual</a>
+        </div>
+        <p class="live-status workspace-status" id="workspace-status" data-state="idle">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="workspace-status-text">Opening the workspace</span>
+        </p>
+        <form class="workspace-open" id="workspace-open-form" hidden>
+          <textarea id="workspace-paste" rows="3" placeholder="Paste a workspace link or an agent connection string" aria-label="Workspace link or connection string"></textarea>
+          <button class="button button--primary" type="submit">Open workspace</button>
+          <button class="button" type="button" id="workspace-open-cancel">Cancel</button>
+        </form>
+      </section>
+
       <section class="sheet-toolbar" aria-label="Score controls">
         <label class="field field--inline">
           <span>Score</span>
           <select id="score-select">
-            <optgroup label="Your scores" id="imported-scores" hidden></optgroup>
+            <optgroup label="Your uploads" id="imported-scores" hidden></optgroup>
             <optgroup label="Included">
               <option value="./scores/minor-descent.musicxml">Minor Descent</option>
               <option value="./scores/minor-descent-alt.musicxml">Minor Descent (alt reading)</option>
@@ -46,7 +70,7 @@
         </label>
         <div class="library-actions" id="library-actions" hidden>
           <button class="button" type="button" id="save-score" title="Save this score as a MusicXML file">Save MusicXML</button>
-          <button class="button" type="button" id="remove-score" title="Take this score out of your list">Remove</button>
+          <button class="button" type="button" id="remove-score" title="Take this score out of your list of uploads">Forget</button>
         </div>
         <div class="stepper" role="group" aria-label="Step through the score">
           <button class="button" type="button" id="step-first" title="Start (Home)">⇤</button>
@@ -119,14 +143,7 @@
               <button class="button" type="button" id="finger-clear" title="Take back the corrections at this moment">Undo corrections here</button>
               <span class="finger-editor__status" id="finger-editor-status"></span>
             </div>
-            <form class="finger-editor__key" id="finger-key-form" hidden>
-              <label class="field field--inline">
-                <span>Editing key</span>
-                <input id="finger-key" type="password" autocomplete="off" />
-              </label>
-              <button class="button button--primary" type="submit">Save with key</button>
-              <span>This site asks for a key before corrections are saved for everyone. Enter it once; it is remembered here.</span>
-            </form>
+            <p class="finger-editor__hint">Pick a finger, or send a note to the other hand with ⇄. Corrections are kept in this workspace, for everyone and every agent looking at it.</p>
           </div>
         </details>
         <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
@@ -163,7 +180,7 @@
 
       <footer class="footer-note">
         <span>Use ← and → to move through the piece, P to play it, Space to hear the moment again. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a position card to jump there.</span>
-        <span>Fingering: score marks first, then <code>scores/*.fingering.json</code>, then a guess. · <a class="crumb" href="./studio.html">Shape a single hand position in the studio</a></span>
+        <span>Everything on this page is a workspace: reload it, open it elsewhere, or hand an agent the connection string and watch it change the screen. Fingering: your corrections first, then the score's marks, then a guess. · <a class="crumb" href="./studio.html">Shape a single hand position in the studio</a></span>
       </footer>
       <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>
     </main>

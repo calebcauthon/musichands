@@ -1186,6 +1186,19 @@ kbd {
   pointer-events: none;
 }
 
+.camera-quality {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 10px;
+  font: inherit;
+  font-size: 0.72rem;
+}
+
+.camera-quality option {
+  color: black;
+  background: white;
+}
+
 .camera-button,
 .camera-shot__go,
 .camera-shot__remove {
@@ -1406,20 +1419,106 @@ kbd {
   color: var(--clay-deep);
 }
 
-.finger-editor__key {
+.finger-editor__hint {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+}
+
+.finger-pick--moved {
+  border-color: var(--clay-deep);
+  background: color-mix(in oklch, var(--paper), var(--clay) 18%);
+}
+
+.finger-pick__move {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.finger-pick__move:hover {
+  border-color: var(--rule);
+  color: var(--ink);
+}
+
+.workspace-bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-sm);
-  font-size: 0.74rem;
-  color: var(--ink-soft);
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-sm);
+  padding: var(--space-xs) 0;
+  border-top: 1px solid var(--ink);
 }
 
-.finger-editor__key input {
-  width: 12rem;
-  min-height: 30px;
+.workspace-bar select {
+  max-width: 14rem;
 }
 
-.finger-editor__key[hidden] {
+.workspace-name {
+  width: 13rem;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--rule);
+  background: color-mix(in oklch, var(--paper), white 28%);
+  font: inherit;
+  font-weight: 700;
+}
+
+.workspace-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-xs);
+}
+
+.workspace-actions .crumb {
+  margin-left: var(--space-xs);
+  font-size: 0.76rem;
+}
+
+.workspace-status {
+  margin: 0 0 0 auto;
+}
+
+.workspace-status[data-state="agent"] .status-dot {
+  background: var(--clay-deep);
+}
+
+.workspace-open {
+  display: grid;
+  flex-basis: 100%;
+  grid-template-columns: 1fr auto auto;
+  gap: var(--space-xs);
+  align-items: start;
+}
+
+.workspace-open textarea {
+  min-height: 3.5rem;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  background: color-mix(in oklch, var(--paper), white 28%);
+  font: inherit;
+  font-size: 0.8rem;
+  resize: vertical;
+}
+
+.workspace-open[hidden] {
   display: none;
+}
+
+@media (max-width: 720px) {
+  .workspace-status {
+    margin-left: 0;
+  }
+
+  .workspace-open {
+    grid-template-columns: 1fr;
+  }
 }

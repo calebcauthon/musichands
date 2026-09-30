@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createAppServer, resolveFile } from "../server.js";
+import { createAppServer, resolveFile, serve } from "../server.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -38,5 +38,20 @@ test("answers requests with the right kind of file", async () => {
     assert.equal((await fetch(`${base}/`, { method: "POST" })).status, 405);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("asked to find a port, the server takes the next free one", async () => {
+  const taken = createAppServer();
+  await new Promise((resolve) => taken.listen(0, resolve));
+  const busy = taken.address().port;
+  const server = createAppServer();
+  try {
+    const chosen = await serve(server, busy, { findPort: true });
+    assert.equal(chosen, busy + 1);
+    await assert.rejects(serve(createAppServer(), busy), /EADDRINUSE/, "without the flag a busy port is an error");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await new Promise((resolve) => taken.close(resolve));
   }
 });

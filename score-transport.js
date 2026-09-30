@@ -10,12 +10,13 @@ export class ScoreTransport {
   // reach(): how long, in ms, the hands like to take to reach a key.
   // perform(index, landIn): show step `index`, with its notes landing `landIn` ms from now.
   // done(): called when the last step has played out.
-  constructor({ steps, tempo, reach, perform, done = () => {}, tail = () => 0, now = () => performance.now(), setTimer = (run, ms) => setTimeout(run, ms), clearTimer = (id) => clearTimeout(id) }) {
-    Object.assign(this, { steps, tempo, reach, perform, done, tail, now, setTimer, clearTimer });
+  constructor({ steps, tempo, reach, perform, schedule = null, cancelScheduled = () => {}, lookAhead = 300, done = () => {}, tail = () => 0, now = () => performance.now(), setTimer = (run, ms) => setTimeout(run, ms), clearTimer = (id) => clearTimeout(id) }) {
+    Object.assign(this, { steps, tempo, reach, perform, schedule, cancelScheduled, lookAhead, done, tail, now, setTimer, clearTimer });
     this.playing = false;
     this.timer = null;
     this.anchor = null; // a step's score time pinned to a moment on the clock
     this.index = 0;
+    this.audioTimer = null;
   }
 
   // The moment on the clock when a score time falls due.
@@ -32,7 +33,35 @@ export class ScoreTransport {
     this.playing = true;
     // The first notes land once the hands have had time to reach them.
     this.anchor = { time: steps[this.index].time, at: this.now() + this.reach() };
+    this.audioIndex = this.index;
+    this.queueAudio();
     this.queue();
+  }
+
+  // Feed the audio clock independently of animation and DOM work. Even if a
+  // frame stalls, notes already queued in Web Audio keep their original beat.
+  queueAudio() {
+    if (!this.schedule || !this.playing) return;
+    const steps = this.steps();
+    const now = this.now();
+    while (this.audioIndex < steps.length) {
+      const beat = this.due(steps[this.audioIndex].time);
+      if (beat > now + this.lookAhead) break;
+      const index = this.audioIndex++;
+      if (beat >= now - 30) this.schedule(index, Math.max(0, beat - this.now()));
+    }
+    if (this.audioIndex < steps.length) this.audioTimer = this.setTimer(() => this.queueAudio(), 25);
+  }
+
+  rescheduleAudio() {
+    if (!this.schedule || !this.playing) return;
+    this.clearTimer(this.audioTimer);
+    this.cancelScheduled();
+    const steps = this.steps();
+    const now = this.now();
+    this.audioIndex = steps.findIndex((step, index) => index >= this.first && this.due(step.time) > now);
+    if (this.audioIndex < 0) this.audioIndex = steps.length;
+    this.queueAudio();
   }
 
   // How far ahead of its beat a step is asked for.
@@ -45,12 +74,19 @@ export class ScoreTransport {
 
   queue() {
     const steps = this.steps();
-    const index = this.index;
-    const beat = this.due(steps[index].time);
+    let index = this.index;
+    let beat = this.due(steps[index].time);
     const wait = Math.max(0, beat - this.lead(index) - this.now());
     this.timer = this.setTimer(() => {
       if (!this.playing) return;
+      // A late frame should show the current pose, not replay a backlog of
+      // expired visual steps. Audio has its own queue and loses no notes here.
+      if (this.schedule) {
+        while (index + 1 < steps.length && this.due(steps[index + 1].time) - this.lead(index + 1) <= this.now()) index += 1;
+        beat = this.due(steps[index].time);
+      }
       this.perform(index, Math.max(0, beat - this.now()));
+      if (!this.playing) return;
       if (index + 1 < steps.length) {
         this.index = index + 1;
         this.queue();
@@ -70,10 +106,16 @@ export class ScoreTransport {
     const time = this.anchor.time + ((now - this.anchor.at) * previousTempo) / 60000;
     this.anchor = { time, at: now };
     this.clearTimer(this.timer);
+    this.clearTimer(this.audioTimer);
+    this.cancelScheduled();
+    this.audioIndex = steps.findIndex((step, index) => index >= this.first && step.time > time + 1e-6);
+    if (this.audioIndex < 0) this.audioIndex = steps.length;
+    this.queueAudio();
     if (this.index < steps.length) this.queue();
   }
 
   finish() {
+    this.clearTimer(this.audioTimer);
     this.playing = false;
     this.timer = null;
     this.done();
@@ -82,6 +124,8 @@ export class ScoreTransport {
   stop() {
     if (!this.playing) return;
     this.clearTimer(this.timer);
+    this.clearTimer(this.audioTimer);
+    this.cancelScheduled();
     this.playing = false;
     this.timer = null;
   }
