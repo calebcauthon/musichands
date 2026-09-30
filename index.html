@@ -113,6 +113,7 @@
             <input id="reflex" type="range" min="0.5" max="4" step="0.25" value="1" />
             <output id="reflex-output">1×</output>
           </label>
+          <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
         </div>
         <details class="finger-editor" id="finger-editor">
           <summary><span>Fingering at this moment</span> <span class="finger-editor__source" id="finger-editor-source"></span></summary>
@@ -162,7 +163,7 @@
       </section>
 
       <footer class="footer-note">
-        <span>Use ← and → to move through the piece, P to play it, Space to hear the moment again. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a position card to jump there.</span>
+        <span>Use ← and → to move through the piece, P to play it, Space to hear the moment again, F for full screen. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a position card to jump there.</span>
         <span>Everything on this page is a workspace: reload it, open it elsewhere, or hand an agent the connection string and watch it change the screen. Fingering: your corrections first, then the score's marks, then a guess. · <a class="crumb" href="./studio.html">Shape a single hand position in the studio</a></span>
       </footer>
       <div class="drop-hint" id="drop-hint" hidden>Drop the score to import it</div>

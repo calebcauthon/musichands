@@ -179,8 +179,11 @@ their defaults).
 something it can only do while running: `play` (from the current `time`),
 `stop`, `replay-together` (sound the chord on screen), `replay-succession`
 (one finger after another), `replay-roundtrip` (up and back down). When
-several browsers watch a workspace, one of them (the "lead", the longest
-connected) plays the music and runs commands; the others follow along.
+several browsers watch a workspace, one of them (the "lead") plays the music
+and runs commands; the others follow along. The lead is the browser that last
+asked to be, which happens when someone presses Play there, else the longest
+connected. `POST /api/workspaces/<id>/lead` with an `x-client` header names a
+watching browser and makes it the lead.
 
 `version` goes up by one with every change, whoever made it. Read it back
 before assuming your change is the latest one.

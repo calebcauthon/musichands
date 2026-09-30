@@ -1496,3 +1496,109 @@ kbd {
     margin-left: 0;
   }
 }
+
+/* Full screen: the piano fills the window, under the line of music being played. */
+.full-screen-button {
+  margin-left: auto;
+}
+
+body.full-screen {
+  overflow: hidden;
+}
+
+body.full-screen .sheet-shell > :not(.score-panel, .hands-panel, .drop-hint) {
+  display: none;
+}
+
+body.full-screen .score-panel {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 3;
+  height: var(--score-strip, 34vh);
+  margin: 0;
+  padding: 0 var(--space-lg);
+  border-width: 0 0 1px;
+  box-shadow: none;
+}
+
+body.full-screen .staff-legend-bar {
+  display: none;
+}
+
+body.full-screen .score-container {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden auto;
+  scrollbar-width: none;
+  /* The lines above and below the one being played fade into the paper. */
+  mask-image: linear-gradient(to bottom, transparent, black 28px, black calc(100% - 28px), transparent);
+}
+
+body.full-screen .score-container::-webkit-scrollbar {
+  display: none;
+}
+
+body.full-screen .hands-panel {
+  position: fixed;
+  inset: var(--score-strip, 34vh) 0 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: #0b0806;
+  backdrop-filter: none;
+}
+
+body.full-screen .hands-panel > :not(.stage-frame, .transport) {
+  display: none;
+}
+
+body.full-screen .stage-frame {
+  flex: 1;
+  aspect-ratio: auto;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  box-shadow: none;
+}
+
+/* The transport floats over the top of the stage, as the camera bar does over the bottom. */
+body.full-screen .transport {
+  position: absolute;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  left: var(--space-sm);
+  z-index: 3;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0.82;
+  transition: opacity 200ms ease;
+}
+
+body.full-screen .transport:hover,
+body.full-screen .transport:focus-within {
+  opacity: 1;
+}
+
+body.full-screen .transport > * {
+  pointer-events: auto;
+}
+
+body.full-screen .transport .button {
+  border-color: oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.72);
+  backdrop-filter: blur(6px);
+}
+
+body.full-screen .transport .button.is-playing {
+  border-color: var(--clay);
+  background: var(--clay);
+}
+
+body.full-screen .slider-field,
+body.full-screen .slider-field output {
+  color: oklch(95% 0.03 84 / 0.9);
+  text-shadow: 0 1px 3px oklch(10% 0.02 50 / 0.8);
+}

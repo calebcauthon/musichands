@@ -259,12 +259,22 @@ class Workspaces {
     };
   }
 
-  // The longest-connected browser leads: it alone plays the music and runs commands.
+  // One browser leads: it alone plays the music and runs commands. That is
+  // the one that last asked to, else the longest connected.
   tellLead(id) {
     const set = this.watchers.get(id);
     if (!set) return;
-    const lead = [...set].sort((a, b) => a.since - b.since)[0];
+    const lead = [...set].sort((a, b) => (b.claimed ?? 0) - (a.claimed ?? 0) || a.since - b.since)[0];
     for (const watcher of set) send(watcher.response, "lead", { lead: watcher === lead });
+  }
+
+  // Makes the browser watching as `clientId` the lead. Returns false if no such browser is watching.
+  claimLead(record, clientId) {
+    const watcher = [...(this.watchers.get(record.id) ?? [])].find((entry) => entry.clientId === clientId);
+    if (!watcher) return false;
+    watcher.claimed = Date.now();
+    this.tellLead(record.id);
+    return true;
   }
 
   broadcast(record, by) {
@@ -323,7 +333,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(201, { ...connection(record), version: record.version, state: record.state, scores: record.scores });
     }
 
-    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
+    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
     if (!match) return json(404, { error: "Not found" });
     const record = await workspaces.get(match[1]);
     if (!record) return json(404, { error: "No such workspace" });
@@ -399,6 +409,12 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
         return json(200, { deleted: scoreId, version: record.version, state: record.state, scores: record.scores });
       }
       return json(405, { error: "Method not allowed" });
+    }
+    if (part === "/lead" && request.method === "POST") {
+      // The browser where someone presses Play is the one that should play.
+      if (!by) return json(400, { error: "Say which browser with x-client or ?client=" });
+      if (!workspaces.claimLead(record, by)) return json(409, { error: `No browser named ${by} is watching this workspace` });
+      return json(200, { lead: by });
     }
     if (part === "/commands" && request.method === "POST") {
       let body;

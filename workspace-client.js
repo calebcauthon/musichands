@@ -214,6 +214,11 @@ export class WorkspaceClient extends EventTarget {
     return body;
   }
 
+  // Asks to be the browser that plays the music. The answer comes as a "lead" event.
+  claimLead() {
+    return api(this.base, `${this.path}/lead`, this.token, { method: "POST", headers: { "x-client": this.client } }).then(answer);
+  }
+
   // Takes a score out of the workspace for good. The server moves on to another if it was open.
   removeScore(id) {
     return api(this.base, `${this.path}/scores/${id}`, this.token, { method: "DELETE", headers: { "x-client": this.client } }).then(answer);

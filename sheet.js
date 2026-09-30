@@ -12,6 +12,7 @@ import { createHandView } from "./hand-view.js";
 import { PianoAudio } from "./piano-audio.js";
 import { readMxl } from "./mxl.js";
 import { parseScore } from "./score-model.js";
+import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js";
 import { ScoreTransport } from "./score-transport.js";
 import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
 
@@ -36,6 +37,7 @@ const DEFAULT_TEMPO = 120; // quarter notes a minute, for scores that do not sta
 const libraryActions = document.querySelector("#library-actions");
 const dropHint = document.querySelector("#drop-hint");
 const handsPanel = document.querySelector(".hands-panel");
+const fullScreenButton = document.querySelector("#full-screen");
 const playScore = document.querySelector("#play-score");
 const tempoSlider = document.querySelector("#tempo");
 const tempoOutput = document.querySelector("#tempo-output");
@@ -86,6 +88,8 @@ const page = {
   replay: null, // notes the play buttons are holding, or null
   tempo: DEFAULT_TEMPO, // quarter notes a minute, as the transport uses it
   cursorAt: null, // the score time the notation cursor was last moved to
+  fullScreen: false, // the piano fills the window, under the line of music being played
+  bands: null, // where each line of music sits in the notation as drawn; worked out when asked for
   measureShown: null, // the measure the hands were last shown in
   notes: [],
   doubts: [],
@@ -404,7 +408,8 @@ function renderHandDetails() {
   });
 }
 
-function moveCursorTo(time) {
+// `jump` puts the notation where it belongs at once instead of gliding there.
+function moveCursorTo(time, { jump = false } = {}) {
   const { osmd } = page;
   if (!osmd?.cursor) return;
   const cursor = osmd.cursor;
@@ -424,6 +429,10 @@ function moveCursorTo(time) {
   cursor.show();
   const cursorElement = cursor.cursorElement;
   if (!cursorElement) return;
+  if (page.fullScreen) {
+    showLineAt(cursorElement, jump);
+    return;
+  }
   // Keep the cursor in the part of the window the hands panel does not cover.
   const box = cursorElement.getBoundingClientRect();
   const floor = Math.min(window.innerHeight, handsPanel.getBoundingClientRect().top);
@@ -502,7 +511,9 @@ async function renderNotation(xmlText) {
     page.osmd.render = () => {
       render();
       page.cursorAt = null;
+      page.bands = null;
       drawStaffGuides();
+      if (page.fullScreen) showScoreStrip();
     };
   }
   await page.osmd.load(xmlText);
@@ -594,6 +605,12 @@ function renderLegend() {
   }
 }
 
+// How many pixels on the screen one of OSMD's layout units (a staff space) takes.
+function notationUnit(svg) {
+  const width = svg.getBoundingClientRect().width;
+  return 10 * (page.osmd.zoom ?? 1) * (width / Number(svg.getAttribute("width") || width));
+}
+
 // Clicking a measure in the notation jumps the hands to that measure. The
 // listener sits on the container because OSMD replaces its SVG on every render.
 function measureAtPoint(clientX, clientY) {
@@ -601,7 +618,7 @@ function measureAtPoint(clientX, clientY) {
   const svg = scoreContainer.querySelector("svg");
   if (!osmd?.GraphicSheet || !svg) return null;
   const rect = svg.getBoundingClientRect();
-  const unit = 10 * (osmd.zoom ?? 1) * (rect.width / Number(svg.getAttribute("width") || rect.width));
+  const unit = notationUnit(svg);
   const x = (clientX - rect.left) / unit;
   const y = (clientY - rect.top) / unit;
   for (const measureRow of osmd.GraphicSheet.MeasureList) {
@@ -625,6 +642,76 @@ scoreContainer.addEventListener("click", (event) => {
   if (index === null) return;
   const measure = page.score?.measures[index];
   if (measure) goToTime(measure.start);
+});
+
+// ---------------------------------------------------------------------------
+// Full screen: the piano fills the window, under the line of music being played
+
+// Where each line of music sits in the notation as it is drawn now.
+function notationBands() {
+  if (page.bands) return page.bands;
+  const svg = scoreContainer.querySelector("svg");
+  if (!page.osmd?.GraphicSheet || !svg) return [];
+  const unit = notationUnit(svg);
+  const systems = page.osmd.GraphicSheet.MusicPages.flatMap((musicPage) => musicPage.MusicSystems).map((system) => {
+    const tops = system.StaffLines.map((staffLine) => staffLine.PositionAndShape.AbsolutePosition.y);
+    // A staff is four spaces tall.
+    return { top: Math.min(...tops) * unit, bottom: (Math.max(...tops) + 4) * unit };
+  });
+  page.bands = systemBands(systems, svg.getBoundingClientRect().height);
+  return page.bands;
+}
+
+// Scrolls the strip of notation to the line the cursor is on.
+function showLineAt(cursorElement, jump) {
+  const svg = scoreContainer.querySelector("svg");
+  const bands = notationBands();
+  if (!svg || !bands.length) return;
+  const drawing = svg.getBoundingClientRect();
+  const box = cursorElement.getBoundingClientRect();
+  const band = bands[bandAt(bands, box.top + box.height / 2 - drawing.top)];
+  // The drawing may not start right at the top of what the strip scrolls.
+  const offset = drawing.top - scoreContainer.getBoundingClientRect().top + scoreContainer.scrollTop;
+  const top = Math.round(offset + stripScroll(band, scoreContainer.clientHeight));
+  if (Math.abs(top - scoreContainer.scrollTop) > 1) scoreContainer.scrollTo({ top, behavior: jump ? "instant" : "smooth" });
+}
+
+// Makes the strip one line of music tall, and shows the line being played.
+function showScoreStrip() {
+  const bands = notationBands();
+  if (!bands.length) return;
+  // The piano keeps most of the window however tall a line of music is.
+  document.body.style.setProperty("--score-strip", `${Math.ceil(stripHeight(bands, window.innerHeight * 0.45))}px`);
+  // A glide started while the window is still changing size is cut short, so go straight there.
+  if (page.steps.length) moveCursorTo(page.steps[page.stepIndex]?.time ?? 0, { jump: true });
+}
+
+function setFullScreen(on) {
+  if (on === page.fullScreen) return;
+  page.fullScreen = on;
+  document.body.classList.toggle("full-screen", on);
+  fullScreenButton.textContent = on ? "Exit full screen" : "Full screen";
+  fullScreenButton.setAttribute("aria-pressed", String(on));
+  // Where the browser will not hand over the whole screen, the page still fills its window.
+  if (on) document.documentElement.requestFullscreen?.().catch(() => {});
+  else if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  if (!on) {
+    document.body.style.removeProperty("--score-strip");
+    scoreContainer.scrollTop = 0;
+  }
+  // The notation is a different width now, so its lines break in new places.
+  if (page.score && page.osmd?.GraphicSheet) {
+    page.osmd.render();
+    if (!on && page.steps.length) moveCursorTo(page.steps[page.stepIndex]?.time ?? 0);
+  }
+}
+
+fullScreenButton.addEventListener("click", () => setFullScreen(!page.fullScreen));
+// Escape, or the browser's own way out of full screen, leaves this one too.
+// Going in, the window has only now reached its full size.
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) setFullScreen(false);
+  else if (page.fullScreen) showScoreStrip();
 });
 
 // ---------------------------------------------------------------------------
@@ -975,7 +1062,15 @@ function stopTransport() {
   showPlaying(false);
 }
 
-playScore.addEventListener("click", () => ws.change({ playing: !ws.state.playing }));
+// Pressing Play here means the music should play here, even if another window
+// or tab has this workspace open and has been the one playing it.
+function togglePlaying() {
+  const playing = !ws.state.playing;
+  if (playing && !ws.lead) ws.claimLead().catch(() => {});
+  ws.change({ playing });
+}
+
+playScore.addEventListener("click", togglePlaying);
 
 function showTempo(tempo) {
   const previous = page.tempo;
@@ -1047,9 +1142,11 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "Home") goToStep(0);
   else if (event.key === "End") goToStep(page.steps.length - 1);
   else if (event.key === " ") replay(event.shiftKey ? "succession" : "together");
-  else if (event.key === "p" || event.key === "P") ws.change({ playing: !ws.state.playing });
+  else if (event.key === "p" || event.key === "P") togglePlaying();
   else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
   else if (event.key === "n" || event.key === "N") ws.change({ numbers: !ws.state.numbers });
+  else if (event.key === "f" || event.key === "F") setFullScreen(!page.fullScreen);
+  else if (event.key === "Escape" && page.fullScreen) setFullScreen(false);
   else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
   else return;
   event.preventDefault();
@@ -1200,12 +1297,12 @@ async function openWorkspace({ id, token }) {
   });
   client.addEventListener("connection", (event) => {
     if (ws !== client) return;
-    if (event.detail.connected) setWorkspaceStatus(client.lead ? "Live · this browser plays the music" : "Live · following", "connected");
+    if (event.detail.connected) setWorkspaceStatus(client.lead ? "Live · this browser plays the music" : "Live · another window is playing the music · press Play to play here", "connected");
     else setWorkspaceStatus("Reconnecting to the workspace", "outside");
   });
   client.addEventListener("lead", (event) => {
     if (ws !== client || !client.connected) return;
-    setWorkspaceStatus(event.detail.lead ? "Live · this browser plays the music" : "Live · following", "connected");
+    setWorkspaceStatus(event.detail.lead ? "Live · this browser plays the music" : "Live · another window is playing the music · press Play to play here", "connected");
     if (!event.detail.lead) stopTransport();
     else if (client.state?.playing) startTransport();
   });

@@ -250,6 +250,39 @@ test("changes reach every browser watching the workspace", async () => {
   });
 });
 
+test("the browser that presses Play takes the lead from the one that had it", async () => {
+  await withServer(async (base) => {
+    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const controller = new AbortController();
+    const watch = async (client) => {
+      const stream = await fetch(`${base}/api/workspaces/${made.id}/events?token=${made.token}&client=${client}`, { signal: controller.signal });
+      const reader = stream.body.getReader();
+      const decoder = new TextDecoder();
+      const seen = { text: "" };
+      seen.until = async (pattern) => {
+        for (let tries = 0; tries < 50 && !pattern.test(seen.text); tries += 1) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          seen.text += decoder.decode(value);
+        }
+        assert.match(seen.text, pattern);
+      };
+      return seen;
+    };
+    const first = await watch("browser-a");
+    await first.until(/event: lead\ndata: \{"lead":true\}/);
+    const second = await watch("browser-b");
+    await second.until(/event: lead\ndata: \{"lead":false\}/);
+    const claim = await fetch(`${base}/api/workspaces/${made.id}/lead`, { method: "POST", headers: { authorization: `Bearer ${made.token}`, "x-client": "browser-b" } });
+    assert.equal(claim.status, 200);
+    await second.until(/event: lead\ndata: \{"lead":true\}/);
+    await first.until(/event: lead\ndata: \{"lead":false\}/);
+    const nobody = await fetch(`${base}/api/workspaces/${made.id}/lead`, { method: "POST", headers: { authorization: `Bearer ${made.token}`, "x-client": "browser-c" } });
+    assert.equal(nobody.status, 409, "only a watching browser can lead");
+    controller.abort();
+  });
+});
+
 test("a workspace is found in a page address, a link or a connection string", () => {
   const token = "5QmZ0Yv7c8Wq9Ls2Xd4Rt6Bn1Kp3Hj0V";
   assert.deepEqual(workspaceFromHash(`#ws=ws-k3j9x2m1qa&token=${token}`), { id: "ws-k3j9x2m1qa", token });
