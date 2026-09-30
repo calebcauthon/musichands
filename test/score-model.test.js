@@ -276,3 +276,24 @@ test("a grand staff still goes top to the right hand, bottom to the left, whatev
   const { events } = parseScore(xml);
   assert.deepEqual(events.map((event) => `${event.hand}:${event.notes[0].note}`).sort(), ["left:A1", "right:A2"]);
 });
+
+test("a note out of the hand's reach goes to the other hand when it can take it", () => {
+  const note = (step, octave, duration, staff, chord = false) =>
+    `<note>${chord ? "<chord/>" : ""}<pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>${duration}</duration><staff>${staff}</staff></note>`;
+  const xml = `<score-partwise><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+    <part id="P1"><measure number="1">
+      <attributes><divisions>1</divisions><time><beats>2</beats><beat-type>4</beat-type></time><staves>2</staves></attributes>
+      ${note("G", 4, 2, 1)}
+      <backup><duration>2</duration></backup>
+      ${note("G", 3, 1, 2)}${note("C", 4, 1, 2)}
+      <backup><duration>2</duration></backup>
+      ${note("C", 2, 2, 2)}${note("C", 3, 2, 2, true)}
+    </measure></part></score-partwise>`;
+  const { events } = parseScore(xml);
+  const at = (hand, time) => events.find((event) => event.hand === hand && event.time === time)?.notes.map((entry) => entry.note);
+  // G3 is too far above the C2–C3 octave, and the right hand's G4 is an octave away.
+  assert.deepEqual(at("left", 0), ["C2", "C3"]);
+  assert.deepEqual(at("right", 0), ["G3", "G4"]);
+  // C4 alone stays where the score puts it.
+  assert.deepEqual(at("left", 1), ["C4"]);
+});

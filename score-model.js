@@ -145,10 +145,9 @@ function readPart(partNode) {
   const sortEvents = (list) => list.sort((a, b) => a.time - b.time || (a.hand === "right" ? -1 : 1));
   sortEvents(events);
   sustainTies(events);
-  measures.forEach((measure) => {
-    sortEvents(measure.events);
-    measure.events.forEach((event) => event.notes.sort((a, b) => a.midi - b.midi));
-  });
+  events.forEach((event) => event.notes.sort((a, b) => a.midi - b.midi));
+  shareOutOfReach(events, measures);
+  measures.forEach((measure) => sortEvents(measure.events));
   return { measures, events };
 }
 
@@ -188,6 +187,53 @@ function sustainTies(events) {
       }
     });
   }
+}
+
+const REACH = 12; // semitones one hand covers, thumb to pinky
+
+// Notes a hand has sounding at `time`: struck then, or still ringing from before.
+function soundingAt(events, hand, time) {
+  const midis = new Set();
+  for (const event of events) {
+    if (event.hand !== hand || event.time > time + 1e-6) continue;
+    for (const note of event.notes) {
+      if (Math.abs(event.time - time) < 1e-6 || event.time + (note.sustain ?? note.duration) > time + 1e-6) midis.add(note.midi);
+    }
+  }
+  return [...midis];
+}
+
+// A score often sets a note on one hand's staff that the hand cannot reach
+// from the rest of its chord: a triplet written on the bass staff while the
+// bass octave is struck under it. A pianist plays that note with the other
+// hand, so give it to the other hand when that hand has it within reach, and
+// leave it where it is otherwise.
+function shareOutOfReach(events, measures) {
+  for (const event of [...events]) {
+    if (event.notes.length < 2) continue;
+    const left = event.hand === "left";
+    const anchor = left ? event.notes[0].midi : event.notes[event.notes.length - 1].midi;
+    const far = event.notes.filter((note) => Math.abs(note.midi - anchor) > REACH && !note.held && !note.tied);
+    if (!far.length) continue;
+    const otherHand = left ? "right" : "left";
+    const span = [...soundingAt(events, otherHand, event.time), ...far.map((note) => note.midi)];
+    if (Math.max(...span) - Math.min(...span) > REACH) continue;
+
+    let other = events.find((candidate) => candidate.hand === otherHand && Math.abs(candidate.time - event.time) < 1e-6);
+    if (!other) {
+      other = { ...event, hand: otherHand, duration: 0, attack: false, notes: [] };
+      events.push(other);
+      measures[event.measureIndex].events.push(other);
+    }
+    event.notes = event.notes.filter((note) => !far.includes(note));
+    for (const note of far) {
+      if (!other.notes.some((entry) => entry.midi === note.midi)) other.notes.push(note);
+      other.duration = Math.max(other.duration, note.duration);
+      other.attack = true;
+    }
+    other.notes.sort((a, b) => a.midi - b.midi);
+  }
+  events.sort((a, b) => a.time - b.time || (a.hand === "right" ? -1 : 1));
 }
 
 // The first tempo the score states, in quarter notes a minute.
