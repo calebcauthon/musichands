@@ -10,6 +10,7 @@ import { applyChoices, HANDS } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
 import { PianoAudio } from "./piano-audio.js";
+import { LOOK_KINDS, LOOKS } from "./looks.js";
 import { readMxl } from "./mxl.js";
 import { parseScore } from "./score-model.js";
 import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js";
@@ -27,6 +28,7 @@ const statusText = document.querySelector("#sheet-status-text");
 const handsStage = document.querySelector("#hands-stage");
 const numbersToggle = document.querySelector("#numbers-toggle");
 const qualitySelect = document.querySelector("#quality-select");
+const lookFields = document.querySelector("#look-fields");
 const DEFAULT_TEMPO = 120; // quarter notes a minute, for scores that do not state one
 const dropHint = document.querySelector("#drop-hint");
 const fullScreenButton = document.querySelector("#full-screen");
@@ -576,6 +578,35 @@ function setFullScreen(on) {
 }
 
 fullScreenButton.addEventListener("click", () => setFullScreen(!page.fullScreen));
+
+// ---------------------------------------------------------------------------
+// The look: the piano, the player and the place, chosen in settings
+
+const LOOK_LABELS = { piano: "Piano", build: "Player", skin: "Skin", outfit: "Clothes", gloves: "Gloves", scene: "Place" };
+const lookSelects = {};
+for (const kind of LOOK_KINDS) {
+  const field = document.createElement("label");
+  field.className = "field field--inline";
+  const name = document.createElement("span");
+  name.textContent = LOOK_LABELS[kind] ?? kind;
+  const select = document.createElement("select");
+  select.setAttribute("aria-label", LOOK_LABELS[kind] ?? kind);
+  for (const [value, spec] of Object.entries(LOOKS[kind])) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = spec.label;
+    select.append(option);
+  }
+  select.addEventListener("change", () => ws.change({ look: { [kind]: select.value } }));
+  field.append(name, select);
+  lookFields.append(field);
+  lookSelects[kind] = select;
+}
+
+function showLook(look) {
+  for (const kind of LOOK_KINDS) lookSelects[kind].value = look[kind];
+  handsView.setLook(look);
+}
 // Escape, or the browser's own way out of full screen, leaves this one too.
 // Going in, the window has only now reached its full size.
 document.addEventListener("fullscreenchange", () => {
@@ -993,6 +1024,11 @@ async function applyLatest() {
     audio.setEnabled(state.sound);
     shown.sound = state.sound;
   }
+  const lookKey = JSON.stringify(state.look);
+  if (lookKey !== shown.look) {
+    showLook(state.look);
+    shown.look = lookKey;
+  }
   if (handsChanged && transport.playing) transport.rescheduleAudio();
   if ((refingered || handsChanged) && !state.playing) void handsView.prepareHands(scoreHandSpecs());
 
@@ -1140,5 +1176,5 @@ window.addEventListener("hashchange", () => {
   if (entry && entry.id !== ws?.id) openWorkspace(entry).catch((error) => setWorkspaceStatus(`That workspace could not be opened: ${error.message}`, "outside"));
 });
 
-window.musichands = { page, get workspace() { return ws; } };
+window.musichands = { page, view: handsView, get workspace() { return ws; } };
 await openFirstWorkspace();

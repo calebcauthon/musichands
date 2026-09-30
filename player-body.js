@@ -35,6 +35,15 @@ const ELBOW = { out: 0.45, back: 0.15 };
 export const ELBOW_SWING = [-12 * DEG, 60 * DEG];
 export const UPRIGHT = { side: 0, forward: 0 };
 
+// Gives the body a build from looks.js: its shoulder width, spine and arm
+// lengths. Poses solved for another build no longer fit, so whoever calls
+// this must solve them again.
+export function applyBuild(build) {
+  for (const key of ["shoulder", "spine", "upperArm", "forearm"]) {
+    if (Number.isFinite(build?.[key])) BODY[key] = build[key];
+  }
+}
+
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 
 // Takes points on the torso (measured from the hips, y up the spine) to where

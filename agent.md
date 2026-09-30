@@ -69,6 +69,7 @@ the workspace holds (see "Scores"). `state` is the whole screen:
   "hands":   { "left": { "show": true, "sound": true }, "right": { "show": true, "sound": true } },
   "numbers": true,
   "sound":   true,
+  "look":    { "piano": "ebony", "build": "man", "skin": "fair", "outfit": "suit", "gloves": "none", "scene": "stage" },
   "corrections": { "fingers": {}, "hands": {} },
   "command": null
 }
@@ -87,6 +88,7 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `hands.left`, `hands.right` | `show`: draw the hand; `sound`: let it be heard. |
 | `numbers` | Show finger numbers over the keys. |
 | `sound` | Master sound switch. |
+| `look` | How the stage looks, one name for each part: `piano` (`ebony`, `white`, `rosewood`, `crimson`), `build` (`man`, `woman`), `skin` (`fair`, `olive`, `brown`, `dark`), `outfit` (`suit`, `tuxedo`, `linen`, `clown`), `gloves` (`none`, `white`, `black`) and `scene` (`stage`, `park`, `hall`). A name that does not exist falls back to the default. |
 | `corrections.fingers` | `{ "<moment>": { "<hand>": { "<note>": <finger 1–5> } } }`. Overrides the score's and the app's fingering at that moment. See "Corrections". |
 | `corrections.hands` | `{ "<moment>": { "<note>": "left" \| "right" } }`. Gives a note to the other hand at that moment. |
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |

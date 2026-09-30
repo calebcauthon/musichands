@@ -1,13 +1,16 @@
-// The player as the stage draws them: a bench, a seated body in a dark suit,
+// The player as the stage draws them: a bench, a seated body in its clothes,
 // and a sleeve from each cuff back to its shoulder. Where everything sits
-// comes from player-body.js; this only gives it a surface.
+// comes from player-body.js; this only gives it a surface, in the build and
+// the outfit a look (looks.js) asks for.
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { LOOKS } from "./looks.js";
 import { BODY, seatPlayer, torsoMatrix } from "./player-body.js";
 import { mat4, vec3 } from "./rig-math.js";
 
 const SIDES = ["left", "right"];
-const COLORS = { cloth: 0x0d0d10, trousers: 0x040405, cuff: 0xf2efe8, leather: 0x0b0a0a, lacquer: 0x040404, shoe: 0x050505 };
+const COLORS = { leather: 0x0b0a0a, lacquer: 0x040404 };
+const SPINE_DRAWN = 0.49; // the spine the torso rings below were drawn for
 const AROUND = 40;
 // A soft rectangle rather than an ellipse, the way cloth sits on a limb.
 const OUTLINE = Array.from({ length: AROUND + 1 }, (_, step) => {
@@ -138,51 +141,73 @@ function roundJoint(joint, before, after, round, wide, tall) {
 }
 
 // Patches a material so it thins to nothing close to the lens, which may sit
-// where the player's head and shoulders are.
-function fading(material) {
+// where the player's head and shoulders are. With `dots`, the cloth is
+// sprinkled with spots of another colour.
+function fading(material, dots = null) {
   material.alphaHash = true;
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.uDotColor = { value: new THREE.Color(dots?.color ?? 0) };
+    shader.uniforms.uDotSize = { value: dots?.size ?? 0 };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vFadePosition;")
       .replace("#include <project_vertex>", "#include <project_vertex>\nvFadePosition = (modelMatrix * vec4(transformed, 1.0)).xyz;");
     shader.fragmentShader = shader.fragmentShader
-      .replace("#include <common>", "#include <common>\nvarying vec3 vFadePosition;")
+      .replace("#include <common>", "#include <common>\nvarying vec3 vFadePosition;\nuniform vec3 uDotColor;\nuniform float uDotSize;")
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        if (uDotSize > 0.0) {
+          vec3 cell = fract(vFadePosition / uDotSize + vec3(0.5, 0.25, 0.5)) - 0.5;
+          float dot = 1.0 - smoothstep(0.22, 0.3, length(cell));
+          diffuseColor.rgb = mix(diffuseColor.rgb, uDotColor, dot);
+        }`,
+      )
       .replace(
         "#include <alphatest_fragment>",
         `diffuseColor.a *= smoothstep(0.07, 0.19, distance(cameraPosition, vFadePosition));
         #include <alphatest_fragment>`,
       );
   };
+  // Materials with different patches must not share a compiled program.
+  material.customProgramCacheKey = () => `figure-${dots ? "dots" : "plain"}`;
   return material;
 }
 
 export class PlayerFigure {
-  constructor() {
+  // look: { build, outfit } specs from looks.js; the defaults dress a man in a dark suit.
+  constructor({ build = LOOKS.build.man, outfit = LOOKS.outfit.suit } = {}) {
     this.group = new THREE.Group();
     this.parts = []; // { mesh, full, light }
     this.light = false;
+    this.build = build;
 
-    const pair = (full, light) => ({ full: fading(full), light: fading(light) });
+    const pair = (full, light, dots) => ({ full: fading(full, dots), light: fading(light, dots) });
     const cloth = (side) =>
       pair(
-        new THREE.MeshPhysicalMaterial({ color: COLORS.cloth, roughness: 0.9, sheen: 1, sheenColor: new THREE.Color(0x3a3a48), sheenRoughness: 0.5, side }),
-        new THREE.MeshLambertMaterial({ color: COLORS.cloth, side }),
+        new THREE.MeshPhysicalMaterial({ color: outfit.cloth, roughness: 0.9, sheen: 1, sheenColor: new THREE.Color(outfit.sheen), sheenRoughness: 1 - outfit.shine * 0.6, side }),
+        new THREE.MeshLambertMaterial({ color: outfit.cloth, side }),
+        outfit.dots,
       );
     // Sleeves show their inside at the cuff. The body does not, so a lens inside it sees out.
     const sleeve = cloth(THREE.DoubleSide);
     const suit = cloth(THREE.FrontSide);
     // Legs sit in the dark under the keyboard, and stay out of the picture's way.
-    const trousers = { full: new THREE.MeshStandardMaterial({ color: COLORS.trousers, roughness: 1 }), light: new THREE.MeshLambertMaterial({ color: COLORS.trousers }) };
+    const trousers = { full: new THREE.MeshStandardMaterial({ color: outfit.trousers, roughness: 1 }), light: new THREE.MeshLambertMaterial({ color: outfit.trousers }) };
     const cuff = pair(
-      new THREE.MeshPhysicalMaterial({ color: COLORS.cuff, roughness: 0.85, sheen: 0.4, sheenRoughness: 0.8, side: THREE.DoubleSide }),
-      new THREE.MeshLambertMaterial({ color: COLORS.cuff, side: THREE.DoubleSide }),
+      new THREE.MeshPhysicalMaterial({ color: outfit.cuff, roughness: 0.85, sheen: 0.4, sheenRoughness: 0.8, side: THREE.DoubleSide }),
+      new THREE.MeshLambertMaterial({ color: outfit.cuff, side: THREE.DoubleSide }),
     );
-    const shoe = { full: new THREE.MeshPhysicalMaterial({ color: COLORS.shoe, roughness: 0.35, clearcoat: 0.5, clearcoatRoughness: 0.3 }), light: new THREE.MeshLambertMaterial({ color: COLORS.shoe }) };
+    const shoe = { full: new THREE.MeshPhysicalMaterial({ color: outfit.shoes, roughness: 0.35, clearcoat: 0.5, clearcoatRoughness: 0.3 }), light: new THREE.MeshLambertMaterial({ color: outfit.shoes }) };
     const leather = { full: new THREE.MeshPhysicalMaterial({ color: COLORS.leather, roughness: 0.62, sheen: 0.3, sheenRoughness: 0.6 }), light: new THREE.MeshLambertMaterial({ color: COLORS.leather }) };
     const lacquer = { full: new THREE.MeshPhysicalMaterial({ color: COLORS.lacquer, roughness: 0.3, clearcoat: 0.6, clearcoatRoughness: 0.28 }), light: new THREE.MeshLambertMaterial({ color: COLORS.lacquer }) };
 
     this.buildBench(leather, lacquer);
-    this.torso = this.add(new Loft(TORSO.length, suit.full).shape(TORSO.map(([height, wide, tall, back]) => ({ center: [0, height, back], across: [1, 0, 0], up: [0, 0, -1], wide, tall }))).mesh, suit);
+    // The torso rings were drawn for one spine; a shorter or narrower build scales them.
+    const rise = BODY.spine / SPINE_DRAWN;
+    this.torso = this.add(
+      new Loft(TORSO.length, suit.full).shape(TORSO.map(([height, wide, tall, back]) => ({ center: [0, height * rise, back * build.torso], across: [1, 0, 0], up: [0, 0, -1], wide: wide * build.torso, tall: tall * build.torso }))).mesh,
+      suit,
+    );
     this.torso.matrixAutoUpdate = false;
     for (const sign of [-1, 1]) this.buildLeg(sign, trousers, shoe);
     this.arms = {};
@@ -223,7 +248,8 @@ export class PlayerFigure {
     const [hip, knee, ankle] = [at(LEG.hip), at(LEG.knee), at(LEG.ankle)];
     const thigh = vec3.normalize(vec3.sub(knee, hip));
     const shin = vec3.normalize(vec3.sub(ankle, knee));
-    const station = (point, tangent, [wide, tall]) => ({ point, tangent, wide, tall });
+    const slim = this.build.limbs;
+    const station = (point, tangent, [wide, tall]) => ({ point, tangent, wide: wide * slim, tall: tall * slim });
     const stations = [
       station(hip, thigh, LEG_RINGS.hip),
       station(vec3.lerp(hip, knee, 0.5), thigh, LEG_RINGS.thigh),
@@ -234,7 +260,7 @@ export class PlayerFigure {
       station(ankle, shin, LEG_RINGS.hem),
     ];
     this.add(new Loft(stations.length, trousers.full).shape(ringsAlong(stations, [0, 1, 0])).mesh, trousers);
-    const rings = SHOE.map(([z, height, wide, tall]) => ({ center: [sign * LEG.ankle[0], height, z], across: [-1, 0, 0], up: [0, 1, 0], wide, tall }));
+    const rings = SHOE.map(([z, height, wide, tall]) => ({ center: [sign * LEG.ankle[0], height, z], across: [-1, 0, 0], up: [0, 1, 0], wide: wide * slim, tall: tall * slim }));
     this.add(new Loft(rings.length, shoe.full).shape(rings).mesh, shoe);
   }
 
@@ -288,15 +314,16 @@ export class PlayerFigure {
     arm.cuff.shape(ringsAlong(CUFF.map(nearWrist), backOfHand));
     const round = Math.min(ELBOW.round, foreLength * 0.4, upperLength * 0.4);
     // The sleeve is the hand's size at the cuff and the body's by the elbow.
-    const fit = (share) => scale + (1 - scale) * Math.min(1, share / FOREARM[0][0]);
+    const slim = this.build.limbs;
+    const fit = (share) => scale + (slim - scale) * Math.min(1, share / FOREARM[0][0]);
     const stations = [
       ...SLEEVE_MOUTH.map(nearWrist),
       ...FOREARM.map(([share, wide, tall]) => ({ point: alongFore(Math.max(share * foreLength, 0.04 * scale)), tangent: fore, wide: wide * fit(share), tall: tall * fit(share) })),
-      { point: alongFore(foreLength - round), tangent: fore, wide: ELBOW.wide - 0.002, tall: ELBOW.tall - 0.003 },
-      ...roundJoint(elbow, fore, upper, round, ELBOW.wide, ELBOW.tall),
-      { point: alongUpper(round), tangent: upper, wide: ELBOW.wide + 0.001, tall: ELBOW.tall + 0.002 },
-      ...UPPER_ARM.map(([share, wide, tall]) => ({ point: alongUpper(round + (upperLength - round) * share), tangent: upper, wide, tall })),
-      ...SHOULDER_CAP.map(([past, radius]) => ({ point: alongUpper(upperLength + past), tangent: upper, wide: radius, tall: radius })),
+      { point: alongFore(foreLength - round), tangent: fore, wide: (ELBOW.wide - 0.002) * slim, tall: (ELBOW.tall - 0.003) * slim },
+      ...roundJoint(elbow, fore, upper, round, ELBOW.wide * slim, ELBOW.tall * slim),
+      { point: alongUpper(round), tangent: upper, wide: (ELBOW.wide + 0.001) * slim, tall: (ELBOW.tall + 0.002) * slim },
+      ...UPPER_ARM.map(([share, wide, tall]) => ({ point: alongUpper(round + (upperLength - round) * share), tangent: upper, wide: wide * slim, tall: tall * slim })),
+      ...SHOULDER_CAP.map(([past, radius]) => ({ point: alongUpper(upperLength + past * slim), tangent: upper, wide: radius * slim, tall: radius * slim })),
     ];
     arm.sleeve.shape(ringsAlong(stations, backOfHand));
   }

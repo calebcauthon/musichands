@@ -21,24 +21,21 @@ import { dueForCut, readShots, ShotList, STARTER_SHOTS } from "./camera-shots.js
 import { FINGER_JOINTS, readSkeleton } from "./glb-skeleton.js";
 import { noteToMidi } from "./hand-model.js";
 import { blendPose, createRig, elbowSwing, lapPose, poseMatrices, solvePose } from "./hand-rig.js";
+import { defaultLook, specsFor } from "./looks.js";
 import { KEYBOARD, KEYS, keyFor } from "./piano-geometry.js";
+import { applyBuild, BODY } from "./player-body.js";
 import { PlayerFigure } from "./player-figure.js";
+import { createPlace } from "./stage-scenes.js";
 import { mat4 } from "./rig-math.js";
 import { advanceSegments } from "./pose-timeline.js";
 
 const HAND_MODEL_URL = new URL("./assets/hand-right.glb", import.meta.url);
 const SIDES = ["left", "right"];
+// The colours that do not belong to a look (looks.js has the rest).
 const COLORS = {
-  backdrop: 0x0b0806,
-  ivory: 0xe9e2d3,
-  ivoryHeld: 0xe8c28e,
-  ebony: 0x0c0b0b,
-  ebonyHeld: 0x5a3220,
   gold: 0xf0a63a,
-  lacquer: 0x040404,
-  felt: 0x6d1320,
-  skin: 0xd8a07c,
 };
+const HELD = 0.35; // how far a key under a finger tints toward gold
 const KEY_LAG = 30; // ms between a finger starting down and its key following
 const KEY_FALL = 25; // ms for a key to reach the bottom, where a piano sounds
 const PRESS = 95; // ms for a lifted finger to come down
@@ -121,19 +118,20 @@ function mirrorKey(key) {
 
 // Skin, shaded per pixel in the hand's rest space so detail stays put as the
 // joints move: fingernails, flushed knuckles and fingertips, wrinkles over the
-// finger joints, and tendons fanning across the back of the hand.
-function createSkinMaterial(rig) {
+// finger joints, and tendons fanning across the back of the hand. `skin` is
+// a skin spec from looks.js.
+function createSkinMaterial(rig, skin) {
   const material = new THREE.MeshPhysicalMaterial({
-    color: COLORS.skin,
+    color: skin.color,
     roughness: 0.52,
     metalness: 0,
     sheen: 0.25,
-    sheenColor: new THREE.Color(0xff7a52),
+    sheenColor: new THREE.Color(skin.sheen),
     sheenRoughness: 0.5,
     clearcoat: 0.12,
     clearcoatRoughness: 0.55,
     // Light that has scattered through skin keeps shadows warm instead of grey.
-    emissive: new THREE.Color(0x5a1408),
+    emissive: new THREE.Color(skin.glow),
     emissiveIntensity: 0.1,
   });
   const inModel = (matrix) => mat4.multiply(rig.wrist, matrix);
@@ -168,6 +166,9 @@ function createSkinMaterial(rig) {
     shader.uniforms.uWrinkleFrame = { value: wrinkleFrames };
     shader.uniforms.uTendon = { value: tendons };
     shader.uniforms.uWristFrame = { value: new THREE.Matrix4().fromArray(rig.wristInverse) };
+    shader.uniforms.uFlushTint = { value: new THREE.Vector3(...skin.flush) };
+    shader.uniforms.uNailColor = { value: new THREE.Vector3(...skin.nail) };
+    shader.uniforms.uNailTip = { value: new THREE.Vector3(...skin.nailTip) };
     shader.vertexShader = shader.vertexShader
       .replace("#include <common>", "#include <common>\nvarying vec3 vRestPosition;\nvarying vec3 vRestNormal;")
       .replace("#include <begin_vertex>", "#include <begin_vertex>\nvRestPosition = position;\nvRestNormal = normal;");
@@ -183,6 +184,9 @@ function createSkinMaterial(rig) {
         uniform mat4 uWrinkleFrame[10];
         uniform vec4 uTendon[4];
         uniform mat4 uWristFrame;
+        uniform vec3 uFlushTint;
+        uniform vec3 uNailColor;
+        uniform vec3 uNailTip;
         float nailMask;
         float nailTip;
         float nailEdge;
@@ -273,11 +277,11 @@ function createSkinMaterial(rig) {
         flushAmount = clamp(flushAmount, 0.0, 1.0);
         float mottle = skinNoise(vRestPosition * 95.0) * 0.6 + skinNoise(vRestPosition * 310.0) * 0.4;
         diffuseColor.rgb *= mix(vec3(0.93, 0.95, 0.97), vec3(1.04, 1.0, 0.97), mottle);
-        diffuseColor.rgb *= mix(vec3(1.0), vec3(1.0, 0.8, 0.77), flushAmount * 0.6);
+        diffuseColor.rgb *= mix(vec3(1.0), uFlushTint, flushAmount * 0.6);
         diffuseColor.rgb *= 1.0 - creaseMask * 0.14;
         // Skin darkens in the fold around the nail.
         diffuseColor.rgb *= 1.0 - nailEdge * 0.3;
-        vec3 nailColor = mix(vec3(0.78, 0.5, 0.45), vec3(0.9, 0.8, 0.74), nailTip);
+        vec3 nailColor = mix(uNailColor, uNailTip, nailTip);
         diffuseColor.rgb = mix(diffuseColor.rgb, nailColor, nailMask * 0.85);`,
       )
       .replace(
@@ -299,14 +303,23 @@ function createSkinMaterial(rig) {
 
 // Light mode deliberately avoids the physical lobes and the procedural skin
 // shader above. At stage size those details cost far more than they contribute.
-function createLightSkinMaterial() {
+function createLightSkinMaterial(skin) {
   return new THREE.MeshStandardMaterial({
-    color: COLORS.skin,
+    color: skin.color,
     roughness: 0.58,
     metalness: 0,
-    emissive: new THREE.Color(0x5a1408),
+    emissive: new THREE.Color(skin.glow),
     emissiveIntensity: 0.08,
   });
+}
+
+// What the hands wear: skin, or gloves over it. Returns { full, light }.
+function createHandMaterials(rig, { skin, gloves }) {
+  if (!gloves.color) return { full: createSkinMaterial(rig, skin), light: createLightSkinMaterial(skin) };
+  return {
+    full: new THREE.MeshPhysicalMaterial({ color: gloves.color, roughness: gloves.roughness ?? 0.8, sheen: gloves.sheen ?? 0, sheenRoughness: 0.8, clearcoat: gloves.clearcoat ?? 0, clearcoatRoughness: 0.3 }),
+    light: new THREE.MeshLambertMaterial({ color: gloves.color }),
+  };
 }
 
 class HandActor {
@@ -350,7 +363,14 @@ class HandActor {
   }
 
   setLightMaterial(light) {
+    this.light = light;
     for (const mesh of this.skinMeshes) mesh.material = light ? this.materials.light : this.materials.full;
+  }
+
+  // Puts the hand in other materials (skin of another tone, or gloves).
+  wear(materials) {
+    this.materials = materials;
+    this.setLightMaterial(this.light);
   }
 
   apply(state) {
@@ -436,18 +456,18 @@ export class HandStage {
 
     this.scene = new THREE.Scene();
     this.qualityMeshes = [];
-    this.scene.background = new THREE.Color(COLORS.backdrop);
-    this.scene.fog = new THREE.Fog(COLORS.backdrop, 1.2, 3.2);
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.14;
     pmrem.dispose();
 
-    this.camera = new THREE.PerspectiveCamera(CAMERA.fov, 2.35, 0.05, 8);
-    this.buildLights();
+    this.camera = new THREE.PerspectiveCamera(CAMERA.fov, 2.35, 0.05, 400);
+    // How everything looks: the piano, the player and the place (looks.js).
+    this.look = specsFor(this.options.look ?? defaultLook());
+    applyBuild(this.look.build);
+    this.setScene(this.look.scene);
     this.buildPiano();
     // The player has no arms to draw until the hands have loaded.
-    this.player = new PlayerFigure();
+    this.player = new PlayerFigure(this.look);
     this.player.setLight(this.quality === "light");
     this.player.group.visible = false;
     this.scene.add(this.player.group);
@@ -458,7 +478,7 @@ export class HandStage {
     if (!this.options.snapshot) this.bindPointer();
 
     this.ready = loadHandAsset().then((asset) => {
-      const materials = { full: createSkinMaterial(asset.rig), light: createLightSkinMaterial() };
+      const materials = createHandMaterials(asset.rig, this.look);
       for (const side of SIDES) {
         const actor = new HandActor(side, asset, materials);
         actor.setLightMaterial(this.quality === "light");
@@ -473,34 +493,22 @@ export class HandStage {
     });
   }
 
-  buildLights() {
-    this.rigLights = new THREE.Group();
-    this.scene.add(this.rigLights);
-    this.scene.add(new THREE.HemisphereLight(0xffe9d2, 0x120c08, 0.05));
-
-    const key = new THREE.SpotLight(0xffd9b0, 3.3, 4, Math.PI / 6, 1, 1.6);
-    key.position.set(-0.6, 0.5, 0.05);
-    key.castShadow = true;
-    key.shadow.mapSize.set(QUALITY[this.quality].shadowMap, QUALITY[this.quality].shadowMap);
-    key.shadow.camera.near = 0.3;
-    key.shadow.camera.far = 2;
-    key.shadow.bias = -0.0002;
-    key.shadow.normalBias = 0.0005;
-    key.shadow.radius = 6;
-    key.target.position.set(0, 0, -0.04);
-    this.rigLights.add(key, key.target);
-    this.keyLight = key;
-
-    const rim = new THREE.SpotLight(0x9fbcff, 4.5, 3, Math.PI / 5, 0.9, 1.6);
-    rim.position.set(0.5, 0.35, -0.6);
-    rim.target.position.set(0, 0.02, 0);
-    this.rigLights.add(rim, rim.target);
-    this.rimLight = rim;
-
-    const fill = new THREE.DirectionalLight(0xffc9a0, 0.06);
-    fill.position.set(0.3, 0.5, 1);
-    fill.target.position.set(0, 0, 0);
-    this.rigLights.add(fill, fill.target);
+  // Puts the piano somewhere: the scenery, the lights and the air of a scene spec.
+  setScene(spec) {
+    if (this.surroundings) {
+      this.scene.remove(this.surroundings.scenery, this.surroundings.lights);
+      this.surroundings.dispose();
+    }
+    this.surroundings = createPlace(spec);
+    this.rigLights = this.surroundings.lights;
+    this.keyLight = this.surroundings.keyLight;
+    this.scene.add(this.surroundings.scenery, this.rigLights);
+    this.scene.background = new THREE.Color(spec.background);
+    this.scene.fog = spec.fog ? new THREE.Fog(spec.background, ...spec.fog) : null;
+    this.scene.environmentIntensity = spec.ambient;
+    const level = QUALITY[this.quality];
+    this.keyLight.shadow.mapSize.set(level.shadowMap, level.shadowMap);
+    if (this.view) this.aimCamera();
   }
 
   buildPiano() {
@@ -525,9 +533,9 @@ export class HandStage {
       const pivot = new THREE.Group();
       pivot.position.set(key.x, 0, -KEYBOARD.pivot);
       const material = key.black
-        ? new THREE.MeshPhysicalMaterial({ color: COLORS.ebony, roughness: 0.28, clearcoat: 0.7, clearcoatRoughness: 0.25, emissive: COLORS.gold, emissiveIntensity: 0 })
-        : new THREE.MeshPhysicalMaterial({ color: COLORS.ivory, roughness: 0.34, clearcoat: 0.35, clearcoatRoughness: 0.4, emissive: COLORS.gold, emissiveIntensity: 0 });
-      const lightMaterial = new THREE.MeshLambertMaterial({ color: key.black ? COLORS.ebony : COLORS.ivory, emissive: COLORS.gold, emissiveIntensity: 0 });
+        ? new THREE.MeshPhysicalMaterial({ color: this.look.piano.ebony, roughness: 0.28, clearcoat: 0.7, clearcoatRoughness: 0.25, emissive: COLORS.gold, emissiveIntensity: 0 })
+        : new THREE.MeshPhysicalMaterial({ color: this.look.piano.ivory, roughness: 0.34, clearcoat: 0.35, clearcoatRoughness: 0.4, emissive: COLORS.gold, emissiveIntensity: 0 });
+      const lightMaterial = new THREE.MeshLambertMaterial({ color: key.black ? this.look.piano.ebony : this.look.piano.ivory, emissive: COLORS.gold, emissiveIntensity: 0 });
       const mesh = new THREE.Mesh(key.black ? blackGeometry : whiteGeometry, this.quality === "light" ? lightMaterial : material);
       this.qualityMeshes.push({ mesh, full: material, light: lightMaterial });
       if (key.black) mesh.position.set(0, KEYBOARD.blackRise - blackHeight / 2, KEYBOARD.pivot - KEYBOARD.whiteLength + KEYBOARD.blackLength / 2);
@@ -550,7 +558,7 @@ export class HandStage {
     }
     this.keyMeshes = [...this.keys.values()].map((entry) => entry.mesh);
 
-    const lacquer = new THREE.MeshPhysicalMaterial({ color: COLORS.lacquer, roughness: 0.3, clearcoat: 0.6, clearcoatRoughness: 0.28 });
+    const lacquer = new THREE.MeshPhysicalMaterial({ color: this.look.piano.lacquer, roughness: 0.3, clearcoat: 0.6, clearcoatRoughness: 0.28 });
     const width = 52 * KEYBOARD.whiteWidth;
     const slip = new THREE.Mesh(new RoundedBoxGeometry(width + 0.2, 0.05, 0.06, 3, 0.004), lacquer);
     slip.position.set(0, -0.031, 0.0325);
@@ -566,9 +574,24 @@ export class HandStage {
       cheek.receiveShadow = true;
       piano.add(cheek);
     }
-    const felt = new THREE.Mesh(new THREE.BoxGeometry(width, 0.012, 0.006), new THREE.MeshStandardMaterial({ color: COLORS.felt, roughness: 1 }));
+    const felt = new THREE.Mesh(new THREE.BoxGeometry(width, 0.012, 0.006), new THREE.MeshStandardMaterial({ color: this.look.piano.felt, roughness: 1 }));
     felt.position.set(0, 0.0, -KEYBOARD.whiteLength - 0.0035);
     piano.add(felt);
+
+    // The case behind the keyboard, its lid closed, on three legs down to the
+    // floor, so the piano stands in a place rather than floating in the dark.
+    const body = new THREE.Mesh(new RoundedBoxGeometry(width + 0.2, 0.26, 1.7, 3, 0.012), lacquer);
+    body.position.set(0, 0.095, -KEYBOARD.whiteLength - 0.07 - 0.85);
+    body.castShadow = true;
+    body.receiveShadow = true;
+    piano.add(body);
+    const legGeometry = new THREE.BoxGeometry(0.09, -0.035 - BODY.floor, 0.09);
+    for (const [x, z] of [[-(width / 2 + 0.03), -0.1], [width / 2 + 0.03, -0.1], [0.15, -1.75]]) {
+      const leg = new THREE.Mesh(legGeometry, lacquer);
+      leg.position.set(x, (-0.035 + BODY.floor) / 2, z);
+      leg.castShadow = true;
+      piano.add(leg);
+    }
 
     // The fallboard: black lacquer deep enough to mirror the keys and hands.
     const pixelRatio = this.renderer.getPixelRatio();
@@ -576,13 +599,13 @@ export class HandStage {
       clipBias: 0.002,
       textureWidth: Math.round(1400 * pixelRatio * 0.6),
       textureHeight: Math.round(360 * pixelRatio * 0.6),
-      color: 0x0f0f0f,
+      color: this.look.piano.mirror,
     });
-    // Lacquer reflects a fraction of what it sees; the stock overlay blend would
-    // let bright keys through at full strength.
+    // Lacquer of its own colour, showing a fraction of what it sees; the stock
+    // overlay blend would let bright keys through at full strength.
     mirror.material.fragmentShader = mirror.material.fragmentShader.replace(
       "gl_FragColor = vec4( blendOverlay( base.rgb, color ), 1.0 );",
-      "gl_FragColor = vec4( min( base.rgb, vec3( 1.4 ) ) * 0.2, 1.0 );",
+      "gl_FragColor = vec4( mix( color, min( base.rgb, vec3( 1.4 ) ), 0.25 ), 1.0 );",
     );
     mirror.position.set(0, 0.105, -KEYBOARD.whiteLength - 0.0068);
     mirror.rotation.x = -0.08;
@@ -591,7 +614,7 @@ export class HandStage {
     this.fallboardMirror = mirror;
     const sheen = new THREE.Mesh(
       new THREE.PlaneGeometry(width + 0.2, 0.2),
-      new THREE.MeshPhysicalMaterial({ color: 0x000000, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.1, transparent: true, opacity: 0.35 }),
+      new THREE.MeshPhysicalMaterial({ color: this.look.piano.mirror, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.1, transparent: true, opacity: 0.35 }),
     );
     sheen.position.copy(mirror.position);
     sheen.position.z += 0.0004;
@@ -602,6 +625,7 @@ export class HandStage {
     const top = new THREE.Mesh(new RoundedBoxGeometry(width + 0.2, 0.02, 0.12, 3, 0.004), lacquer);
     top.position.set(0, 0.212, -KEYBOARD.whiteLength - 0.075);
     piano.add(top);
+    this.pianoMaterials = { lacquer: [lacquer], felt: felt.material };
   }
 
   // One texture holding every white key's note name.
@@ -743,6 +767,57 @@ export class HandStage {
     this.invalidate();
   }
 
+  // How big the hands are: the page's setting, on a body of this build.
+  get handScale() {
+    return this.options.scale * this.look.build.hand;
+  }
+
+  // Dresses the stage in a look (looks.js): the piano, the player and the place.
+  setLook(look) {
+    const before = this.look;
+    const specs = specsFor(look);
+    this.look = specs;
+    if (specs.scene.name !== before.scene.name) this.setScene(specs.scene);
+    if (specs.piano.name !== before.piano.name) this.paintPiano();
+    const rebuilt = specs.build.name !== before.build.name;
+    if (rebuilt || specs.outfit.name !== before.outfit.name) {
+      applyBuild(specs.build);
+      this.scene.remove(this.player.group);
+      this.player = new PlayerFigure(specs);
+      this.player.setLight(this.quality === "light");
+      this.player.group.visible = Boolean(this.hands.right);
+      this.scene.add(this.player.group);
+    }
+    if (specs.skin.name !== before.skin.name || specs.gloves.name !== before.gloves.name) {
+      const rig = Object.values(this.hands)[0]?.rig;
+      if (rig) {
+        const materials = createHandMaterials(rig, specs);
+        for (const actor of Object.values(this.hands)) actor.wear(materials);
+      }
+    }
+    if (rebuilt) {
+      // Poses were solved for the old body and hands; every one is found again.
+      this.solved.clear();
+      this.prepared.clear();
+      for (const side of SIDES) {
+        if (!this.hands[side]) continue;
+        if (this.requests[side]) this.place(side, { ...this.requests[side], strike: false }, { settle: true });
+        else this.place(side, null, { immediate: true });
+      }
+    } else for (const actor of Object.values(this.hands)) actor.moved = true;
+    this.invalidate();
+  }
+
+  // Recolours the piano to the look's piano spec.
+  paintPiano() {
+    const { piano } = this.look;
+    for (const material of this.pianoMaterials.lacquer) material.color.set(piano.lacquer);
+    this.pianoMaterials.felt.color.set(piano.felt);
+    this.fallboardMirror.material.uniforms.color.value.set(piano.mirror);
+    this.fallboardSheen.material.color.set(piano.mirror);
+    for (const entry of this.keys.values()) this.paintKey(entry);
+  }
+
   setOptions(options) {
     const before = JSON.stringify([this.options.curl, this.options.lift, this.options.scale]);
     Object.assign(this.options, options);
@@ -856,7 +931,7 @@ export class HandStage {
       const key = keyFor(noteToMidi(entry.note));
       return { finger: entry.finger, key: mirror ? mirrorKey(key) : key, state: states[entry.finger] ?? "rest" };
     });
-    const options = { scale: this.options.scale, curl: this.options.curl, lift: this.options.lift, mirror };
+    const options = { scale: this.handScale, curl: this.options.curl, lift: this.options.lift, mirror };
     const restId = `${side}|${request.fingers.map((entry) => `${entry.finger}:${entry.note}`).join(",")}|base`;
     let base = this.solved.get(restId);
     if (!base) {
@@ -1005,7 +1080,7 @@ export class HandStage {
 
   // Where a hand waits on the player's lap.
   lapState() {
-    return { pose: lapPose(), scale: this.options.scale };
+    return { pose: lapPose(), scale: this.handScale };
   }
 
   // Fits the player's arms to the hands wherever they have got to.
@@ -1046,10 +1121,13 @@ export class HandStage {
 
   paintKey(entry) {
     entry.pivot.rotation.x = (KEYBOARD.dip * entry.dip) / KEYBOARD.pivot;
-    const base = entry.key.black ? COLORS.ebony : COLORS.ivory;
-    const held = entry.key.black ? COLORS.ebonyHeld : COLORS.ivoryHeld;
-    entry.material.color.set(base).lerp(new THREE.Color(held), entry.tint).lerp(new THREE.Color(COLORS.gold), entry.glow * 0.85);
-    entry.material.emissiveIntensity = entry.glow * (entry.key.black ? 0.75 : 0.42);
+    const base = entry.key.black ? this.look.piano.ebony : this.look.piano.ivory;
+    const gold = new THREE.Color(COLORS.gold);
+    // Both detail levels' materials, so a switch between them finds the key already painted.
+    for (const material of [entry.fullMaterial, entry.lightMaterial]) {
+      material.color.set(base).lerp(gold, entry.tint * HELD).lerp(gold, entry.glow * 0.85);
+      material.emissiveIntensity = entry.glow * (entry.key.black ? 0.75 : 0.42);
+    }
   }
 
   stepKeys(now, delta) {
@@ -1363,6 +1441,11 @@ export class HandStage {
     this.canvas.addEventListener("pointerup", finish);
     this.canvas.addEventListener("pointercancel", finish);
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    // The wheel (or a trackpad) moves the camera in and out.
+    this.canvas.addEventListener("wheel", (event) => {
+      event.preventDefault();
+      this.zoomBy(Math.exp(-event.deltaY * 0.0012));
+    }, { passive: false });
     this.canvas.addEventListener("dblclick", (event) => {
       if (midiAt(event) === null) this.setView();
     });

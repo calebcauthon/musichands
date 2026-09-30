@@ -71,6 +71,11 @@ class StageView {
     this.stage.setQuality(name);
   }
 
+  // The look (looks.js): the piano, the player and the place.
+  setLook(look) {
+    this.stage.setLook(look);
+  }
+
   setOptions({ showNotes = true, showGuides = true, palmHeight = 44, curve = 52, weight = 30 }) {
     this.stage.setOptions({
       showNotes,
@@ -168,6 +173,8 @@ class FlatView {
     this.options = options;
     if (this.hands) this.setHands(this.hands);
   }
+
+  setLook() {}
 
   renderCard(container, hand, fingers) {
     container.innerHTML = createHandKeyboardSvg({ hand, fingers, showGuides: false, showNotes: true });

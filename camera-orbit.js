@@ -3,7 +3,7 @@
 // the player's right; elevation 90 looks straight down. Zoom 2 is twice as
 // close as the stage would otherwise frame the hands.
 
-export const ORBIT_LIMITS = { azimuth: [-150, 150], elevation: [6, 89], zoom: [0.45, 2.8] };
+export const ORBIT_LIMITS = { azimuth: [-150, 150], elevation: [6, 89], zoom: [0.05, 2.8] };
 export const ZOOM_STEP = 1.18; // how much one press of a zoom button moves the camera
 const TURN = { azimuth: 0.35, elevation: 0.28 }; // degrees for each pixel dragged
 export const DRAG_THRESHOLD = 7; // pixels a press may wander and still count as a click

@@ -3,6 +3,7 @@
 // keeps them in step. Nothing on the screen lives anywhere else.
 import { cleanView } from "./camera-orbit.js";
 import { readShots } from "./camera-shots.js";
+import { cleanLook, defaultLook } from "./looks.js";
 
 export const COMMANDS = ["play", "stop", "replay-together", "replay-succession", "replay-roundtrip"];
 export const LIMITS = { tempo: [30, 240], reflexes: [0.5, 4] };
@@ -18,6 +19,7 @@ export function defaultState() {
     hands: { left: { show: true, sound: true }, right: { show: true, sound: true } },
     numbers: true, // finger numbers over the keys
     sound: true,
+    look: defaultLook(), // the piano, the player and the place, by name (see looks.js)
     corrections: { fingers: {}, hands: {} },
     command: null, // { seq, type }: the last thing an agent asked the page to do
   };
@@ -92,6 +94,7 @@ export function cleanState(value) {
   }
   if (typeof value.numbers === "boolean") state.numbers = value.numbers;
   if (typeof value.sound === "boolean") state.sound = value.sound;
+  state.look = cleanLook(value.look);
   if (isObject(value.corrections)) {
     state.corrections = { fingers: cleanFingers(value.corrections.fingers), hands: cleanHandMoves(value.corrections.hands) };
   }
