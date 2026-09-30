@@ -1167,9 +1167,12 @@ export class HandStage {
     return { view: cleanView(this.orbitGoal), shots: this.shots.views.map((view) => ({ ...view })), autoCut: this.autoCut };
   }
 
-  // Takes the camera state a page keeps, without reporting it back.
+  // Takes the camera state a page keeps, without reporting it back. Only a
+  // view that has changed since it was last given moves the camera: the page
+  // keeps sending the same one, and it must not undo a cut the camera made on its own.
   applyCamera({ view, shots, autoCut } = {}, { immediate = false } = {}) {
-    if (view && !sameView(view, this.orbitGoal)) this.setView(view, { immediate, remember: false });
+    if (view && !sameView(view, this.givenView ?? this.orbitGoal)) this.setView(view, { immediate, remember: false });
+    if (view) this.givenView = { ...view };
     const wanted = shots ?? STARTER_SHOTS;
     if (JSON.stringify(wanted) !== JSON.stringify(this.shots.views)) {
       this.shots = new ShotList(wanted);
