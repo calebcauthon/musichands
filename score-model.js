@@ -29,6 +29,8 @@ function readPart(partNode) {
   let beats = 4;
   let beatType = 4;
   let fifths = 0;
+  let staffCount = 1;
+  const clefs = {}; // staff number → clef sign, as it stands
   let measureStart = 0; // in quarter notes from the beginning of the piece
 
   children(partNode, "measure").forEach((measureNode, measureIndex) => {
@@ -42,6 +44,10 @@ function readPart(partNode) {
       }
       const key = child(attributes, "key");
       if (key) fifths = number(key, "fifths", fifths);
+      staffCount = number(attributes, "staves", staffCount);
+    }
+    for (const attributesNode of children(measureNode, "attributes")) {
+      for (const clef of children(attributesNode, "clef")) clefs[Number(clef.attrs.number ?? 1)] = text(clef, "sign", "G");
     }
 
     const measureNumber = measureNode.attrs.number ?? String(measureIndex + 1);
@@ -54,10 +60,10 @@ function readPart(partNode) {
       fifths,
       events: [],
     };
-    const byMoment = new Map();
     let position = 0; // in divisions from the start of this measure
     let chordStart = 0;
     let maxPosition = 0;
+    const played = []; // every pitched note in the measure, before it is given to a hand
 
     measureNode.children.forEach((node) => {
       if (node.name === "backup") {
@@ -84,8 +90,15 @@ function readPart(partNode) {
 
       const pitch = child(node, "pitch");
       if (!pitch) return;
-      const staff = number(node, "staff", 1);
-      const hand = staff >= 2 ? "left" : "right";
+      played.push({ node, pitch, start, duration, staff: number(node, "staff", 1) });
+    });
+
+    // Which staff belongs to which hand can change from measure to measure
+    // when a piece is set on more than two staves.
+    const handOf = handsForStaves(staffCount, [...new Set(played.map((entry) => entry.staff))].sort((a, b) => a - b), clefs);
+    const byMoment = new Map();
+    for (const { node, pitch, start, duration, staff } of played) {
+      const hand = handOf(staff);
       const ties = children(node, "tie").map((tie) => tie.attrs.type);
       const key = `${start}:${hand}`;
       let event = byMoment.get(key);
@@ -119,7 +132,7 @@ function readPart(partNode) {
           duration: duration / divisions,
         });
       }
-    });
+    }
 
     // A pickup measure is only as long as the notes in it.
     const pickup = measureNode.attrs.implicit === "yes" && maxPosition > 0;
@@ -137,6 +150,19 @@ function readPart(partNode) {
     measure.events.forEach((event) => event.notes.sort((a, b) => a.midi - b.midi));
   });
   return { measures, events };
+}
+
+// Gives each staff of a measure to a hand. On a grand staff the top staff is
+// the right hand. A piece set on more staves is read the way it is played:
+// the staves in use are shared out top half to the right hand, bottom half to
+// the left, and a lone or odd staff goes by its clef.
+function handsForStaves(staffCount, active, clefs) {
+  if (staffCount <= 2) return (staff) => (staff >= 2 ? "left" : "right");
+  const byClef = (staff) => (clefs[staff] === "F" ? "left" : "right");
+  if (active.length <= 1) return byClef;
+  const upper = new Set(active.slice(0, Math.floor(active.length / 2)));
+  const lower = new Set(active.slice(Math.ceil(active.length / 2)));
+  return (staff) => (upper.has(staff) ? "right" : lower.has(staff) ? "left" : byClef(staff));
 }
 
 // A tied note sounds for its own length and that of every note it is tied

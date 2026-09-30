@@ -299,3 +299,23 @@ test("says plainly when a PDF has no music it can read", () => {
   empty.system(100, ["treble"], [300]);
   assert.throws(() => recognizeScore([empty.done()]), /no notes/);
 });
+
+test("reads a piece set on four staves, two for each hand", () => {
+  const page = new Page();
+  const system = page.system(80, ["treble", "bass", "treble", "bass"], [300], { gap: SPACE * 5 });
+  page.time(system, 0, 85, 2, 4);
+  // First measure: only the bottom pair is used, as an ordinary grand staff.
+  page.note(system, 2, 130, 4, { head: "half" }); // B4
+  page.note(system, 3, 130, 2, { head: "half", stem: "down" }); // F3
+  // Second measure: all four, a chord and an octave for each hand.
+  page.note(system, 0, 330, 0, { head: "half" }); // F5
+  page.note(system, 1, 330, 6, { head: "half", stem: "down" }); // B2
+  page.note(system, 2, 330, 8, { head: "half" }); // E4
+  page.note(system, 3, 330, 10, { head: "half", stem: "down" }); // E2
+  const read = pdfToMusicXml([page.done()]);
+  assert.deepEqual(read.warnings, []);
+  const { events } = parseScore(read.xml);
+  const hands = (time) => events.filter((event) => event.time === time).map((event) => `${event.hand}:${event.notes.map((note) => note.note).join("+")}`).sort();
+  assert.deepEqual(hands(0), ["left:F3", "right:B4"]);
+  assert.deepEqual(hands(2), ["left:E2+E4", "right:B2+F5"]);
+});

@@ -246,3 +246,33 @@ test("a chain of ties adds up, and a chord can tie some notes and strike others"
   assert.deepEqual(second.map((entry) => [entry.note, entry.held]), [["C4", true], ["E4", false]]);
   assert.equal(events[3].notes[0].held, false, "the same pitch played again after the tie ends is a new note");
 });
+
+test("a piece set on four staves shares them out by what is in use", () => {
+  const note = (step, octave, staff) => `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>4</duration><staff>${staff}</staff></note>`;
+  const rest = (staff) => `<note><rest/><duration>4</duration><staff>${staff}</staff></note>`;
+  const back = "<backup><duration>4</duration></backup>";
+  const xml = `<score-partwise><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1">
+    <measure number="1"><attributes><divisions>1</divisions><staves>4</staves>
+      <clef number="1"><sign>G</sign></clef><clef number="2"><sign>F</sign></clef><clef number="3"><sign>G</sign></clef><clef number="4"><sign>F</sign></clef></attributes>
+      ${rest(1)}${back}${rest(2)}${back}${note("C", 5, 3)}${back}${note("C", 3, 4)}</measure>
+    <measure number="2">${note("C", 6, 1)}${back}${note("C", 4, 2)}${back}${note("E", 3, 3)}${back}${note("C", 2, 4)}</measure>
+    <measure number="3">${rest(1)}${back}${rest(2)}${back}${rest(3)}${back}${note("G", 2, 4)}</measure>
+    <measure number="4">${rest(1)}${back}${rest(2)}${back}${note("G", 4, 3)}${back}${rest(4)}</measure>
+  </part></score-partwise>`;
+  const { measures } = parseScore(xml);
+  const hands = (measure) => measure.events.map((event) => `${event.hand}:${event.notes.map((note) => note.note).join("+")}`).sort();
+  assert.deepEqual(hands(measures[0]), ["left:C3", "right:C5"], "with the top pair empty, the bottom pair is an ordinary grand staff");
+  assert.deepEqual(hands(measures[1]), ["left:C2+E3", "right:C4+C6"], "with all four in use, each hand has a pair");
+  assert.deepEqual(hands(measures[2]), ["left:G2"], "a lone bass-clef staff is the left hand");
+  assert.deepEqual(hands(measures[3]), ["right:G4"], "a lone treble-clef staff is the right hand");
+});
+
+test("a grand staff still goes top to the right hand, bottom to the left, whatever the clefs", () => {
+  const note = (step, octave, staff) => `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>4</duration><staff>${staff}</staff></note>`;
+  const xml = `<score-partwise><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list><part id="P1">
+    <measure number="1"><attributes><divisions>1</divisions><staves>2</staves><clef number="1"><sign>F</sign></clef><clef number="2"><sign>F</sign></clef></attributes>
+      ${note("A", 2, 1)}<backup><duration>4</duration></backup>${note("A", 1, 2)}</measure>
+  </part></score-partwise>`;
+  const { events } = parseScore(xml);
+  assert.deepEqual(events.map((event) => `${event.hand}:${event.notes[0].note}`).sort(), ["left:A1", "right:A2"]);
+});

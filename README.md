@@ -40,7 +40,7 @@ The hand model is the generic hand from the [WebXR Input Profiles](https://githu
 
 The front page shows a whole piece with hand positions. (`/sheet.html`, its old address, sends you there.)
 
-- `score-model.js` reads MusicXML (via the tiny reader in `xml.js`) into a timeline of hand moments: which notes each hand holds at each beat, split by staff.
+- `score-model.js` reads MusicXML (via the tiny reader in `xml.js`) into a timeline of hand moments: which notes each hand holds at each beat. On a grand staff the top staff is the right hand. A piece set on more staves (Rachmaninoff's C-sharp minor prelude uses four) is read measure by measure: the staves in use are shared out, the top half to the right hand and the bottom half to the left, and a lone staff goes by its clef.
 - `mxl.js` unpacks compressed `.mxl` files in the browser, so the "Open MusicXML…" button accepts either format.
 - `fingering.js` groups each hand's notes into positions that fit under one hand and chooses fingers for each position. Fingerings written in the score win, then entries in `scores/<name>.fingering.json` (keyed `"measure:beat"`), then a heuristic guess. The page labels which one it used.
 - The notation itself is drawn by [OpenSheetMusicDisplay](https://opensheetmusicdisplay.org/), loaded from a CDN; only the sheet view uses it.
@@ -67,7 +67,7 @@ Notation programs draw noteheads, rests, clefs and accidentals as characters of 
 - `pdf-reader.js` uses [pdf.js](https://mozilla.github.io/pdf.js/) 4.10, loaded from a CDN the first time a PDF is imported, to list every glyph, line and filled shape on each page.
 - `pdf-score.js` finds the staves and barlines, reads each note's pitch from where it sits under the clef and key, works out durations from note shapes, beams, flags, dots and triplet marks, times each measure from the columns the notes are printed in, finds ties, and writes MusicXML. It also reads the title, composer and tempo.
 
-What it reads: piano music on one or two staves, from PDFs that use a SMuFL font, which includes scores downloaded from MuseScore.
+What it reads: piano music on one to four staves, from PDFs that use a SMuFL font, which includes scores downloaded from MuseScore.
 
 What it does not read: scanned pages (they hold only a picture), PDFs set in older music fonts with their own character codes, grace notes, repeats and voltas (played straight through), ottava lines, and fingerings printed in the score.
 

@@ -42,6 +42,7 @@ const FLAT_ORDER = [6, 2, 5, 1, 4, 0, 3];
 const STEP_NAMES = ["C", "D", "E", "F", "G", "A", "B"];
 const TYPE_NAMES = { 8: "breve", 4: "whole", 2: "half", 1: "quarter", 0.5: "eighth", 0.25: "16th", 0.125: "32nd", 0.0625: "64th" };
 const DIVISIONS = 48; // MusicXML ticks in a quarter note
+const MAX_STAVES = 4;
 const EPSILON = 1e-6;
 
 const isMusic = (glyph) => glyph.code >= 0xe000 && glyph.code <= 0xf8ff;
@@ -505,11 +506,12 @@ export function recognizeScore(pages) {
         : "This PDF holds only pictures of its pages, so there are no notes in it to read. Scanned scores cannot be imported.",
     );
   }
-  const staffCount = Math.min(2, Math.max(...systems.map((system) => system.staves.length)));
-  if (systems.some((system) => system.staves.length > 2)) warnings.push("Some systems have more than two staves; only the top two were read.");
+  // Piano music is set on two staves, or on four when a hand needs two of its own.
+  const staffCount = Math.min(MAX_STAVES, Math.max(...systems.map((system) => system.staves.length)));
+  if (systems.some((system) => system.staves.length > MAX_STAVES)) warnings.push(`Some systems have more than ${MAX_STAVES} staves; only the top ${MAX_STAVES} were read.`);
   for (const system of systems) {
-    if (system.staves.length > 2) {
-      system.staves = system.staves.slice(0, 2);
+    if (system.staves.length > MAX_STAVES) {
+      system.staves = system.staves.slice(0, MAX_STAVES);
       system.bottom = system.staves.at(-1).bottom;
     }
   }
@@ -528,8 +530,9 @@ export function recognizeScore(pages) {
       const clef = read.clefs.find((entry) => entry.staff === staff && entry.x < system.left + space * 6);
       if (clef) state.clefs[staff] = clef;
       else if (!state.clefs[staff]) {
-        state.clefs[staff] = staff === 0 ? { sign: "G", line: 2, top: 38, octave: 0 } : { sign: "F", line: 4, top: 26, octave: 0 };
-        warnings.push(`No clef was found for staff ${staff + 1}; assumed ${staff === 0 ? "treble" : "bass"}.`);
+        const treble = staff % 2 === 0;
+        state.clefs[staff] = treble ? { sign: "G", line: 2, top: 38, octave: 0 } : { sign: "F", line: 4, top: 26, octave: 0 };
+        warnings.push(`No clef was found for staff ${staff + 1}; assumed ${treble ? "treble" : "bass"}.`);
       }
       const from = (clef?.x ?? system.left) + space * 1.5;
       const run = keyRun(read.accidentals, staff, from, space, space * 4.5);
@@ -592,7 +595,7 @@ export function recognizeScore(pages) {
     const keyAlter = new Array(7).fill(0);
     const order = measure.fifths > 0 ? SHARP_ORDER : FLAT_ORDER;
     for (let n = 0; n < Math.abs(measure.fifths); n += 1) keyAlter[order[n]] = measure.fifths > 0 ? 1 : -1;
-    for (let staff = 0; staff < 2; staff += 1) {
+    for (let staff = 0; staff < MAX_STAVES; staff += 1) {
       const changes = (measure.clefChanges ?? []).filter((clef) => clef.staff === staff).sort(byX);
       const sounding = new Map();
       const chords = measure.entries.filter((entry) => entry.kind === "chord").sort(byX);
