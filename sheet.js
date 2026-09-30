@@ -41,8 +41,8 @@ const fullScreenButton = document.querySelector("#full-screen");
 const playScore = document.querySelector("#play-score");
 const tempoSlider = document.querySelector("#tempo");
 const tempoOutput = document.querySelector("#tempo-output");
-const reflexSlider = document.querySelector("#reflex");
-const reflexOutput = document.querySelector("#reflex-output");
+const tempoTicks = document.querySelector("#tempo-ticks");
+const handChoice = document.querySelector(".hand-choice");
 const captions = {
   right: document.querySelector("#right-hand-caption"),
   left: document.querySelector("#left-hand-caption"),
@@ -282,7 +282,7 @@ function showHands({ jump = false, strike = true, landIn = null } = {}) {
   const step = page.steps[page.stepIndex];
   if (!step || !ws?.state) return 0;
   const moment = momentAt(step);
-  const { shown: drawn, ghost } = applyChoices(moment, ws.state.hands);
+  const { shown: drawn } = applyChoices(moment, ws.state.hands);
   const hands = { left: null, right: null };
   const underFinger = new Set();
   for (const hand of drawn) {
@@ -300,9 +300,11 @@ function showHands({ jump = false, strike = true, landIn = null } = {}) {
     };
   }
   const landing = handsView.setHands(hands, { immediate: jump, landIn });
-  // Keys with no hand on them: clicked ones, and those of a hand that is hidden.
-  const loose = [...page.clicked, ...(page.replay ?? [...ghost.held, ...ghost.struck])].filter((midi) => !underFinger.has(midi));
-  const struckLoose = strike && !jump ? (page.replay ? [...page.replay] : ghost.struck).filter((midi) => !underFinger.has(midi)) : [];
+  // Keys with no hand on them: clicked ones, and replayed ones. A hidden hand
+  // leaves its keys alone, even when it is still heard.
+  const hidden = new Set(HANDS.filter((hand) => moment[hand] && !drawn.includes(hand)).flatMap((hand) => moment[hand].sounding));
+  const loose = [...page.clicked, ...(page.replay ?? [])].filter((midi) => !underFinger.has(midi) && !hidden.has(midi));
+  const struckLoose = strike && !jump && page.replay ? loose.filter((midi) => page.replay.has(midi)) : [];
   handsView.setSounding(loose, { struck: struckLoose, delay: landIn ?? landing });
   return landing;
 }
@@ -1077,11 +1079,38 @@ function showTempo(tempo) {
   page.tempo = tempo;
   tempoSlider.value = tempo;
   tempoOutput.value = tempo;
+  showTempoTicks(page.score?.tempo ?? DEFAULT_TEMPO);
   if (tempo !== previous) transport.retime(previous);
 }
 
+// Marks along the tempo slider at the score's own tempo and at a quarter, a
+// half and three quarters of it. Clicking one sets the tempo.
+const TICK_LABELS = { 0.25: "¼", 0.5: "½", 0.75: "¾" };
+function showTempoTicks(normal) {
+  if (tempoTicks.dataset.normal === String(normal)) return;
+  tempoTicks.dataset.normal = normal;
+  const [low, high] = [Number(tempoSlider.min), Number(tempoSlider.max)];
+  tempoTicks.replaceChildren(
+    ...Object.entries({ ...TICK_LABELS, 1: String(normal) }).flatMap(([share, label]) => {
+      const tempo = Math.round(normal * Number(share));
+      if (tempo < low || tempo > high) return [];
+      const tick = document.createElement("button");
+      tick.type = "button";
+      tick.className = `slider-tick${share === "1" ? " slider-tick--normal" : ""}`;
+      tick.style.setProperty("--at", (tempo - low) / (high - low));
+      tick.textContent = label;
+      tick.title = share === "1" ? `The score's own tempo, ${tempo} a minute` : `${label} of the score's tempo, ${tempo} a minute`;
+      tick.dataset.tempo = tempo;
+      return [tick];
+    }),
+  );
+}
+
 tempoSlider.addEventListener("input", () => ws.change({ tempo: Number(tempoSlider.value) }));
-reflexSlider.addEventListener("input", () => ws.change({ reflexes: Number(reflexSlider.value) }));
+tempoTicks.addEventListener("click", (event) => {
+  const tick = event.target.closest("[data-tempo]");
+  if (tick) ws.change({ tempo: Number(tick.dataset.tempo) });
+});
 
 // Which hands to draw and to hear, and whether to number the fingers.
 for (const hand of HANDS) {
@@ -1091,6 +1120,13 @@ for (const hand of HANDS) {
   }
 }
 
+// One hand on its own, or both: seen and heard alike.
+const HAND_SETS = { left: { left: true, right: false }, both: { left: true, right: true }, right: { left: false, right: true } };
+handChoice.addEventListener("click", (event) => {
+  const on = HAND_SETS[event.target.closest("[data-hands]")?.dataset.hands];
+  if (on) ws.change({ hands: { left: { show: on.left, sound: on.left }, right: { show: on.right, sound: on.right } } });
+});
+
 function showChoices(choices) {
   for (const hand of HANDS) {
     const strip = document.querySelector(`.hand-strip[data-hand="${hand}"]`);
@@ -1098,6 +1134,8 @@ function showChoices(choices) {
     strip.classList.toggle("is-silent", !choices[hand].sound);
     for (const what of ["show", "sound"]) document.querySelector(`#${hand}-${what}`).checked = choices[hand][what];
   }
+  const current = Object.keys(HAND_SETS).find((choice) => HANDS.every((hand) => HAND_SETS[choice][hand] === (choices[hand].show && choices[hand].sound)));
+  for (const button of handChoice.querySelectorAll("[data-hands]")) button.setAttribute("aria-pressed", String(button.dataset.hands === current));
 }
 
 numbersToggle.addEventListener("change", () => ws.change({ numbers: numbersToggle.checked }));
@@ -1205,8 +1243,6 @@ async function applyLatest() {
 
   showTempo(state.tempo ?? page.score.tempo ?? DEFAULT_TEMPO);
   if (state.reflexes !== shown.reflexes) {
-    reflexSlider.value = state.reflexes;
-    reflexOutput.value = `${state.reflexes}×`;
     handsView.setSpeed(state.reflexes);
     shown.reflexes = state.reflexes;
   }

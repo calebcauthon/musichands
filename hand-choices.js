@@ -24,23 +24,16 @@ export function readChoices(text) {
 
 // Splits a moment of the score by those choices. `moment` maps each hand to
 // { sounding: [midi], struck: [{ midi }] }.
-//   shown:  the hands to draw, by name
-//   ghost:  keys that go down with no hand on them, because their hand is hidden
+//   shown:  the hands to draw, by name; a hidden hand leaves its keys alone
 //   heard:  the struck notes to sound
 export function applyChoices(moment, choices) {
   const shown = [];
-  const ghost = { held: [], struck: [] };
   const heard = [];
   for (const hand of HANDS) {
     const entry = moment[hand];
     if (!entry) continue;
-    const struck = new Set(entry.struck.map((note) => note.midi));
     if (choices[hand].show) shown.push(hand);
-    else {
-      ghost.struck.push(...struck);
-      ghost.held.push(...entry.sounding.filter((midi) => !struck.has(midi)));
-    }
     if (choices[hand].sound) heard.push(...entry.struck);
   }
-  return { shown, ghost, heard };
+  return { shown, heard };
 }

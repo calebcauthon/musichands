@@ -9,35 +9,31 @@ const moment = {
 const mids = (notes) => notes.map((note) => note.midi);
 
 test("with nothing switched off, both hands are drawn and heard", () => {
-  const { shown, ghost, heard } = applyChoices(moment, defaultChoices());
+  const { shown, heard } = applyChoices(moment, defaultChoices());
   assert.deepEqual(shown, ["left", "right"]);
-  assert.deepEqual(ghost, { held: [], struck: [] });
   assert.deepEqual(mids(heard), [36, 60, 64]);
 });
 
-test("a hidden hand leaves its keys going down on their own, and is still heard", () => {
+test("a hidden hand is not drawn, and is still heard", () => {
   const choices = defaultChoices();
   choices.left.show = false;
-  const { shown, ghost, heard } = applyChoices(moment, choices);
+  const { shown, heard } = applyChoices(moment, choices);
   assert.deepEqual(shown, ["right"]);
-  assert.deepEqual(ghost, { held: [43], struck: [36] });
   assert.deepEqual(mids(heard), [36, 60, 64]);
 });
 
 test("a silenced hand is still drawn", () => {
   const choices = defaultChoices();
   choices.right.sound = false;
-  const { shown, ghost, heard } = applyChoices(moment, choices);
+  const { shown, heard } = applyChoices(moment, choices);
   assert.deepEqual(shown, ["left", "right"]);
-  assert.deepEqual(ghost.struck, []);
   assert.deepEqual(mids(heard), [36]);
 });
 
 test("seeing and hearing are chosen separately for each hand", () => {
   const choices = { left: { show: false, sound: false }, right: { show: true, sound: true } };
-  const { shown, ghost, heard } = applyChoices(moment, choices);
+  const { shown, heard } = applyChoices(moment, choices);
   assert.deepEqual(shown, ["right"]);
-  assert.deepEqual(ghost.struck, [36]);
   assert.deepEqual(mids(heard), [60, 64]);
   assert.deepEqual(applyChoices({ right: moment.right }, choices).shown, ["right"], "a hand that is not playing is simply absent");
 });

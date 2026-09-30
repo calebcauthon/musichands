@@ -103,16 +103,14 @@
         </div>
         <div class="transport" role="group" aria-label="Play the score">
           <button class="button button--primary" type="button" id="play-score" title="Play the score from here (P)">▶ Play</button>
-          <label class="slider-field" title="How fast the music plays, in quarter notes a minute">
-            <span>Tempo</span>
-            <input id="tempo" type="range" min="30" max="240" step="1" value="120" />
-            <output id="tempo-output">120</output>
-          </label>
-          <label class="slider-field" title="How quickly the hands move and strike">
-            <span>Reflexes</span>
-            <input id="reflex" type="range" min="0.5" max="4" step="0.25" value="1" />
-            <output id="reflex-output">1×</output>
-          </label>
+          <div class="slider-field" title="How fast the music plays, in quarter notes a minute. The marks are the score's own tempo and a quarter, a half and three quarters of it.">
+            <label for="tempo">Tempo</label>
+            <span class="slider-track">
+              <input id="tempo" type="range" min="30" max="240" step="1" value="120" />
+              <span class="slider-ticks" id="tempo-ticks"></span>
+            </span>
+            <output id="tempo-output" for="tempo">120</output>
+          </div>
           <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
         </div>
         <details class="finger-editor" id="finger-editor">
@@ -131,6 +129,11 @@
           </div>
         </details>
         <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
+        <div class="hand-choice" role="group" aria-label="Which hands to see and hear">
+          <button class="button" type="button" data-hands="left" aria-pressed="false" title="See and hear the left hand on its own">Left hand only</button>
+          <button class="button" type="button" data-hands="both" aria-pressed="true" title="See and hear both hands">Both hands</button>
+          <button class="button" type="button" data-hands="right" aria-pressed="false" title="See and hear the right hand on its own">Right hand only</button>
+        </div>
         <div class="hands-captions">
           <div class="hand-strip" data-hand="left">
             <div class="hand-toggles" role="group" aria-label="Left hand">

@@ -1103,7 +1103,7 @@ kbd {
   pointer-events: none;
 }
 
-/* Playing the score: the play button, tempo and reflexes. */
+/* Playing the score: the play button and the tempo. */
 .transport {
   display: flex;
   flex-wrap: wrap;
@@ -1137,6 +1137,63 @@ kbd {
   letter-spacing: 0;
   text-align: right;
   text-transform: none;
+}
+
+/* The slider's track, with the marks for the score's tempo and fractions of it beneath. */
+.slider-track {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: center;
+  padding-bottom: 1rem;
+}
+
+.slider-track input {
+  margin: 0;
+}
+
+.slider-ticks {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1rem;
+}
+
+.slider-tick {
+  --thumb: 16px;
+  position: absolute;
+  top: 0;
+  left: calc(var(--at) * (100% - var(--thumb)) + var(--thumb) / 2);
+  padding: 0;
+  border: 0;
+  background: none;
+  transform: translateX(-50%);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  text-transform: none;
+}
+
+.slider-tick::before {
+  content: "";
+  display: block;
+  width: 1px;
+  height: 4px;
+  margin: 0 auto 2px;
+  background: currentColor;
+}
+
+.slider-tick--normal {
+  color: var(--clay-deep);
+  font-weight: 700;
+}
+
+.slider-tick:hover {
+  color: var(--ink);
 }
 
 /* Turning the camera. */
@@ -1550,7 +1607,7 @@ body.full-screen .hands-panel {
   backdrop-filter: none;
 }
 
-body.full-screen .hands-panel > :not(.stage-frame, .transport) {
+body.full-screen .hands-panel > :not(.stage-frame, .transport, .hand-choice) {
   display: none;
 }
 
@@ -1601,4 +1658,43 @@ body.full-screen .slider-field,
 body.full-screen .slider-field output {
   color: oklch(95% 0.03 84 / 0.9);
   text-shadow: 0 1px 3px oklch(10% 0.02 50 / 0.8);
+}
+
+body.full-screen .slider-tick {
+  color: oklch(95% 0.03 84 / 0.75);
+}
+
+body.full-screen .slider-tick--normal,
+body.full-screen .slider-tick:hover {
+  color: oklch(95% 0.03 84);
+}
+
+/* One hand or both: the choice sits at the bottom right, above the camera bar, in full screen only. */
+.hand-choice {
+  display: none;
+}
+
+body.full-screen .hand-choice {
+  position: absolute;
+  right: var(--space-sm);
+  bottom: 52px;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+}
+
+body.full-screen .hand-choice .button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.85);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
+body.full-screen .hand-choice .button[aria-pressed="true"] {
+  border-color: #e9a63a;
+  color: oklch(18% 0.02 50);
+  background: #e9a63a;
 }
