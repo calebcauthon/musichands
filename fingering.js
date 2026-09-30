@@ -5,8 +5,8 @@ import { noteToMidi } from "./hand-model.js";
 // fingers for the whole position at once so they stay consistent across it.
 //
 // Finger numbers come, in priority order, from:
-//   1. fingerings written in the score,
-//   2. overrides from a sidecar file keyed by "measure:beat",
+//   1. overrides keyed by "measure:beat": the player's own corrections, or a sidecar file,
+//   2. fingerings written in the score,
 //   3. a spread heuristic across the keys the position uses.
 // Every event and position records where its fingering came from so the page can
 // be honest about what is authored and what is a guess.
@@ -79,9 +79,11 @@ function overrideFor(overrides, event) {
 function authoredFingers(event, overrides) {
   const override = overrideFor(overrides, event);
   return event.notes.map((note) => {
-    if (note.finger) return { finger: note.finger, source: "score" };
+    // A correction is deliberate, so it beats what the score says.
     const value = override?.[note.note] ?? override?.[noteToMidi(note.note)];
-    return value ? { finger: Number(value), source: "override" } : { finger: null, source: "heuristic" };
+    if (value >= 1 && value <= 5) return { finger: Number(value), source: "override" };
+    if (note.finger) return { finger: note.finger, source: "score" };
+    return { finger: null, source: "heuristic" };
   });
 }
 

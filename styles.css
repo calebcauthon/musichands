@@ -1293,3 +1293,133 @@ kbd {
   opacity: 0.5;
   text-decoration: line-through;
 }
+
+/* Correcting fingerings. */
+.finger-editor {
+  margin-bottom: var(--space-sm);
+  border: 1px solid var(--rule);
+  background: oklch(97% 0.015 84 / 0.7);
+}
+
+.finger-editor summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-2xs) var(--space-sm);
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.finger-editor__source {
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.finger-editor__source[data-source="heuristic"] {
+  color: var(--clay-deep);
+}
+
+.finger-editor__source[data-source="override"] {
+  color: oklch(45% 0.12 150);
+}
+
+.finger-editor__body {
+  display: grid;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm) var(--space-sm);
+}
+
+.finger-editor__rows {
+  display: grid;
+  gap: var(--space-2xs);
+}
+
+.finger-row-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+}
+
+.finger-row-edit__hand {
+  min-width: 3rem;
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.finger-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--rule);
+  background: color-mix(in oklch, var(--paper), white 28%);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.finger-pick--override {
+  border-color: oklch(45% 0.12 150);
+}
+
+.finger-pick--heuristic {
+  border-style: dashed;
+}
+
+.finger-pick select {
+  width: auto;
+  min-height: 26px;
+  padding: 0 22px 0 6px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.finger-editor__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.finger-editor__foot .button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 0.72rem;
+}
+
+.finger-editor__status {
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+}
+
+.finger-editor__status[data-state="saved"] {
+  color: oklch(45% 0.12 150);
+}
+
+.finger-editor__status[data-state="failed"] {
+  color: var(--clay-deep);
+}
+
+.finger-editor__key {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.74rem;
+  color: var(--ink-soft);
+}
+
+.finger-editor__key input {
+  width: 12rem;
+  min-height: 30px;
+}
+
+.finger-editor__key[hidden] {
+  display: none;
+}

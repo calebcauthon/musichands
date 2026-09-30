@@ -107,6 +107,28 @@
             <output id="reflex-output">1×</output>
           </label>
         </div>
+        <details class="finger-editor" id="finger-editor">
+          <summary><span>Fingering at this moment</span> <span class="finger-editor__source" id="finger-editor-source"></span></summary>
+          <div class="finger-editor__body">
+            <div id="finger-editor-rows" class="finger-editor__rows"></div>
+            <div class="finger-editor__foot">
+              <label class="check-field" title="Also change every other moment where this hand plays exactly these notes">
+                <input id="finger-everywhere" type="checkbox" checked />
+                <span>Everywhere these same notes recur</span>
+              </label>
+              <button class="button" type="button" id="finger-clear" title="Take back the corrections at this moment">Undo corrections here</button>
+              <span class="finger-editor__status" id="finger-editor-status"></span>
+            </div>
+            <form class="finger-editor__key" id="finger-key-form" hidden>
+              <label class="field field--inline">
+                <span>Editing key</span>
+                <input id="finger-key" type="password" autocomplete="off" />
+              </label>
+              <button class="button button--primary" type="submit">Save with key</button>
+              <span>This site asks for a key before corrections are saved for everyone. Enter it once; it is remembered here.</span>
+            </form>
+          </div>
+        </details>
         <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
         <div class="hands-captions">
           <div class="hand-strip" data-hand="left">

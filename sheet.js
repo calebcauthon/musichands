@@ -1,5 +1,6 @@
 import { assignFingering } from "./fingering.js";
 import { noteToMidi } from "./hand-model.js";
+import { CorrectionStore, countCorrections, matchingMoments, momentKey, scoreId, withCorrection } from "./corrections.js";
 import { applyChoices, HANDS, readChoices } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
@@ -48,7 +49,7 @@ const positionLists = {
 
 const SOURCE_LABEL = {
   score: "fingering from the score",
-  override: "fingering from the sidecar file",
+  override: "corrected fingering",
   heuristic: "fingering is a guess",
 };
 
@@ -66,7 +67,35 @@ const state = {
   cursorAt: null, // the score time the notation cursor was last moved to
   measureShown: null, // the measure the hands were last shown in
   choices: readChoices(localStorage.getItem("musichands-hands")), // which hands to draw and to hear
+  scoreId: null, // the open score's identity, for its corrections
+  overrides: {}, // fingering corrections and sidecar fingerings, keyed measure:beat
+  saving: null, // a pending save of the corrections
 };
+const editor = {
+  details: document.querySelector("#finger-editor"),
+  rows: document.querySelector("#finger-editor-rows"),
+  source: document.querySelector("#finger-editor-source"),
+  everywhere: document.querySelector("#finger-everywhere"),
+  clear: document.querySelector("#finger-clear"),
+  status: document.querySelector("#finger-editor-status"),
+  keyForm: document.querySelector("#finger-key-form"),
+  keyInput: document.querySelector("#finger-key"),
+};
+const corrections = new CorrectionStore({
+  askForKey: () =>
+    new Promise((resolve) => {
+      editor.details.open = true;
+      editor.keyForm.hidden = false;
+      editor.keyInput.focus();
+      editor.keyForm.onsubmit = (event) => {
+        event.preventDefault();
+        editor.keyForm.hidden = true;
+        editor.keyForm.onsubmit = null;
+        resolve(editor.keyInput.value.trim() || null);
+        editor.keyInput.value = "";
+      };
+    }),
+});
 
 function setStatus(message, stateName = "idle") {
   statusText.textContent = message;
@@ -219,6 +248,7 @@ function renderHands({ jump = false, sound = false, landIn = null } = {}) {
   fingeringNote.textContent = labels.length ? labels.join(" · ") : "";
   fingeringNote.dataset.source = sources.has("heuristic") ? "heuristic" : "authored";
   handsTitle.textContent = step.events.length === 1 ? `${step.events[0].hand === "right" ? "Right" : "Left"} hand plays` : "Both hands play";
+  renderFingerEditor();
 
   Object.values(positionLists).forEach((list) => {
     list.querySelectorAll(".position-card").forEach((card) => {
@@ -470,21 +500,17 @@ async function loadScore(xmlText, { overrideUrl = null, label = "score", notes =
   stopPlaying();
   state.xml = xmlText;
   setTempo(state.score.tempo ?? DEFAULT_TEMPO);
-  const overrides = await loadOverrides(overrideUrl);
-  const fingered = assignFingering(state.score.events, { overrides });
-  state.events = fingered.events;
-  state.positions = fingered.positions;
-  state.steps = buildSteps(state.events);
+  // Fingerings from a sidecar file, with the player's own corrections on top.
+  state.scoreId = await scoreId(xmlText);
+  state.overrides = { ...(await loadOverrides(overrideUrl)), ...(await corrections.load(state.scoreId)) };
+  state.notes = notes;
+  state.doubts = doubts;
+  refinger();
   scoreTitle.textContent = state.score.title;
   document.title = `MusicHands — ${state.score.title}`;
   renderPositionLists();
   goToStep(0, { jump: true });
-
-  const guessed = state.events.filter((event) => event.fingeringSource === "heuristic").length;
-  const summary = guessed
-    ? `${state.score.measures.length} measures · ${state.positions.right.length + state.positions.left.length} hand positions · ${guessed} of ${state.events.length} moments use guessed fingering`
-    : `${state.score.measures.length} measures · ${state.positions.right.length + state.positions.left.length} hand positions · fingering fully authored`;
-  setStatus([summary, ...notes, ...doubts].join(" · "), doubts.length ? "outside" : "connected");
+  showSummary();
 
   try {
     await renderNotation(xmlText);
@@ -494,6 +520,113 @@ async function loadScore(xmlText, { overrideUrl = null, label = "score", notes =
   }
   return true;
 }
+
+// Works the fingering out again from the score and the corrections.
+function refinger() {
+  const fingered = assignFingering(state.score.events, { overrides: state.overrides });
+  state.events = fingered.events;
+  state.positions = fingered.positions;
+  state.steps = buildSteps(state.events);
+}
+
+function showSummary() {
+  const guessed = state.events.filter((event) => event.fingeringSource === "heuristic").length;
+  const corrected = countCorrections(state.overrides);
+  const summary = guessed
+    ? `${state.score.measures.length} measures · ${state.positions.right.length + state.positions.left.length} hand positions · ${guessed} of ${state.events.length} moments use guessed fingering`
+    : `${state.score.measures.length} measures · ${state.positions.right.length + state.positions.left.length} hand positions · fingering fully authored`;
+  const parts = [summary, ...(corrected ? [`${corrected} ${corrected === 1 ? "correction" : "corrections"}`] : []), ...(state.notes ?? []), ...(state.doubts ?? [])];
+  setStatus(parts.join(" · "), state.doubts?.length ? "outside" : "connected");
+}
+
+// The editor for the fingering at the current step.
+const SOURCE_WORD = { score: "from the score", override: "corrected", heuristic: "a guess" };
+
+function renderFingerEditor() {
+  const step = state.steps[state.stepIndex];
+  editor.rows.replaceChildren();
+  if (!step) return;
+  const sources = new Set();
+  for (const hand of ["right", "left"]) {
+    const event = step.events.find((entry) => entry.hand === hand);
+    if (!event) continue;
+    const row = document.createElement("div");
+    row.className = "finger-row-edit";
+    const label = document.createElement("span");
+    label.className = "finger-row-edit__hand";
+    label.textContent = hand === "right" ? "Right" : "Left";
+    row.append(label);
+    const overrideHere = state.overrides[momentKey(event)]?.[hand] ?? {};
+    const written = state.score.events.find((raw) => raw.hand === hand && raw.time === event.time);
+    for (const note of [...event.notes].sort((a, b) => a.midi - b.midi)) {
+      const authored = overrideHere[note.note] ? "override" : written?.notes.find((raw) => raw.midi === note.midi)?.finger ? "score" : "heuristic";
+      sources.add(authored);
+      const pick = document.createElement("label");
+      pick.className = `finger-pick finger-pick--${authored}`;
+      pick.title = `${note.note}: fingering ${SOURCE_WORD[authored]}`;
+      const name = document.createElement("span");
+      name.textContent = note.note;
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `Finger for ${note.note}, ${hand} hand`);
+      for (const finger of [1, 2, 3, 4, 5]) {
+        const option = document.createElement("option");
+        option.value = finger;
+        option.textContent = finger;
+        option.selected = finger === note.finger;
+        select.append(option);
+      }
+      select.addEventListener("change", () => correctFinger(event, note.note, Number(select.value)));
+      pick.append(name, select);
+      row.append(pick);
+    }
+    editor.rows.append(row);
+  }
+  const word = sources.has("override") ? "corrected" : sources.has("heuristic") ? "a guess" : sources.size ? "from the score" : "";
+  editor.source.textContent = word;
+  editor.source.dataset.source = sources.has("override") ? "override" : sources.has("heuristic") ? "heuristic" : "score";
+  editor.clear.hidden = !step.events.some((event) => state.overrides[momentKey(event)]?.[event.hand]);
+}
+
+function correctFinger(event, note, finger) {
+  const moments = editor.everywhere.checked ? matchingMoments(state.events, event) : [event];
+  state.overrides = withCorrection(state.overrides, moments, event.hand, note, finger);
+  applyCorrections(`${note} → ${finger}${moments.length > 1 ? ` in ${moments.length} places` : ""}`);
+}
+
+function applyCorrections(what) {
+  refinger();
+  renderPositionLists();
+  renderHands({ jump: true });
+  showSummary();
+  saveCorrections(what);
+}
+
+async function saveCorrections(what) {
+  const id = state.scoreId;
+  editor.status.textContent = "Saving…";
+  editor.status.dataset.state = "";
+  const attempt = corrections.save(id, state.overrides);
+  state.saving = attempt;
+  const saved = await attempt;
+  if (state.saving !== attempt || state.scoreId !== id) return;
+  editor.status.textContent = saved ? `Saved: ${what}` : corrections.available === false ? "Kept here for now; the server could not be reached, so it is not saved" : "Not saved";
+  editor.status.dataset.state = saved ? "saved" : "failed";
+}
+
+editor.clear.addEventListener("click", () => {
+  const step = state.steps[state.stepIndex];
+  if (!step) return;
+  for (const event of step.events) {
+    const key = momentKey(event);
+    if (state.overrides[key]?.[event.hand]) {
+      delete state.overrides[key][event.hand];
+      if (!Object.keys(state.overrides[key]).length) delete state.overrides[key];
+    }
+  }
+  applyCorrections("corrections here removed");
+});
+editor.details.open = localStorage.getItem("musichands-finger-editor") === "open";
+editor.details.addEventListener("toggle", () => localStorage.setItem("musichands-finger-editor", editor.details.open ? "open" : "closed"));
 
 async function loadScoreUrl(url) {
   const response = await fetch(url);

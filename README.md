@@ -48,6 +48,8 @@ The front page shows a whole piece with hand positions. (`/sheet.html`, its old 
 
 **Play** runs the piece from where you are, at the tempo on the slider, with both hands landing on the beat; P does the same. The tempo starts at the score's own. **Reflexes** sets how quickly the hands move and strike, so stepping by hand can keep up with a fast piece. While playing, the hands always keep time: if the tempo leaves less room than the reflexes want, they hurry. `score-transport.js` does the timing.
 
+**Fingering at this moment**, above the stage, lets you correct the fingering: pick a different finger for any note the hands are on. With "Everywhere these same notes recur" ticked, the change also applies wherever that hand plays exactly those notes. A correction beats a fingering printed in the score. Corrections are saved on the server under the score's content (`corrections.js`, and the `/api/fingerings` route in `server.js`), so the same file opened in any browser gets them. The server can require an editing key (the `EDIT_KEY` variable); the page asks for it once and remembers it. Corrections live under `DATA_DIR` (default `./data`), one JSON file per score, in the same shape as the sidecar files.
+
 Each hand has its own **Show** and **Sound** boxes under the stage. A hidden hand is not drawn, but its keys still go down and light up, so you can see what it would play; a silenced hand is drawn but not heard. **Finger numbers** (N) shows or hides the numbers over the keys. These choices are remembered. `hand-choices.js` works out what is drawn and heard.
 
 A note tied over from before is held, not played again: its finger stays down, its key stays down, and the sound that started the tie rings through it. Only the notes that are not tied over are struck.
@@ -77,7 +79,7 @@ A measure whose notes do not add up to the time signature is named in the status
 
 The app is only files, so any host that can serve them will do. `npm start` runs `server.js`, a small server with no dependencies that listens on `$PORT` and serves nothing but the app's own files.
 
-It runs on [Railway](https://railway.com/) at <https://musichands-production.up.railway.app>. To put out a new version, run `railway up --service musichands` from this folder.
+It runs on [Railway](https://railway.com/) at <https://musichands-production.up.railway.app>, with a volume mounted at `/data` for the corrections and `DATA_DIR` and `EDIT_KEY` set on the service. To put out a new version, run `railway up --service musichands` from this folder.
 
 ## Tests
 
