@@ -9,6 +9,8 @@
 // The lesson is part of the workspace, so the page and any agent see the same
 // one; the page plays the passage, keeps the camera straight over the hands,
 // and says what to do.
+import { passageRange, passageSteps } from "./passage.js";
+
 export const STAGES = ["right", "left", "both"]; // in this order
 export const PHASES = ["intro", "position", "show", "once", "ramp"]; // the whole passage heard; placing the hand; the notes named and the passage shown; once through, slowly; looping and climbing to the score's tempo
 export const INTRO_SHARE = 0.9; // "nearly full speed", as a share of the score's tempo
@@ -29,7 +31,9 @@ export function defaultLesson(measureIndex, measureCount) {
   return { from, to: Math.min(from + LESSON_MEASURES - 1, Math.max(0, measureCount - 1)), stage: "right", phase: "intro" };
 }
 
-// A lesson as stored or sent, made sound, or null for none.
+// A lesson as the workspace holds it, made sound, or null for none. The
+// workspace keeps the lesson as it is given (it is this module's own data),
+// so it is read through here.
 export function cleanLesson(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const from = Number(value.from);
@@ -40,6 +44,7 @@ export function cleanLesson(value) {
     to,
     stage: STAGES.includes(value.stage) ? value.stage : "right",
     phase: PHASES.includes(value.phase) ? value.phase : "intro",
+    ...(typeof value.score === "string" ? { score: value.score } : {}), // the piece it is a lesson on
   };
 }
 
@@ -101,22 +106,15 @@ export function phasePlays(phase) {
   return { intro: 1, show: SHOW_TIMES, once: 1, ramp: Infinity }[phase] ?? 0;
 }
 
-// Where the passage sits in the piece, in quarter notes: [start, end).
-export function lessonRange(lesson, measures) {
-  if (!measures.length) return null;
-  const first = measures[Math.min(lesson.from, measures.length - 1)];
-  const last = measures[Math.min(lesson.to, measures.length - 1)];
-  return { start: first.start, end: last.start + last.length, from: first.number, to: last.number };
-}
+// Where the lesson's passage sits in the piece and among its steps.
+export { passageRange as lessonRange, passageSteps as lessonSteps };
 
-// The steps the passage covers: the first and last indexes in `steps` whose
-// time falls in the range, or null if none does.
-export function lessonSteps(range, steps) {
-  const first = steps.findIndex((step) => step.time >= range.start - 1e-6);
-  if (first === -1 || steps[first].time >= range.end - 1e-6) return null;
-  let last = first;
-  while (last + 1 < steps.length && steps[last + 1].time < range.end - 1e-6) last += 1;
-  return { first, last };
+// The workspace `passage` for where the lesson stands: its measures, as many
+// times as the phase plays them (once where the phase does not play, so that
+// Play still keeps to the passage).
+export function lessonPassage(lesson) {
+  const times = phasePlays(lesson.phase);
+  return { from: lesson.from, to: lesson.to, times: Number.isFinite(times) ? Math.max(1, times) : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +195,7 @@ function nameNotes(hand, events, range) {
 // `measures`; `positions` and `events` are the fingered ones; `tempo` is the
 // practice tempo and `target` the score's.
 export function phaseLines(lesson, { score, positions, events, tempo, target }) {
-  const range = lessonRange(lesson, score.measures);
+  const range = passageRange(lesson, score.measures);
   if (!range) return [];
   const where = range.from === range.to ? `measure ${range.from}` : `measures ${range.from} to ${range.to}`;
   if (lesson.phase === "intro") return [`We're going to learn ${where}${score.title && score.title !== "Untitled" ? ` of ${score.title}` : ""}.`, "Here it is at nearly full speed."];

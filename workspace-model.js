@@ -3,7 +3,6 @@
 // keeps them in step. Nothing on the screen lives anywhere else.
 import { cleanView } from "./camera-orbit.js";
 import { readShots } from "./camera-shots.js";
-import { cleanLesson } from "./lesson.js";
 import { cleanLook, defaultLook } from "./looks.js";
 
 export const COMMANDS = ["play", "stop", "replay-together", "replay-succession", "replay-roundtrip"];
@@ -22,7 +21,7 @@ export function defaultState() {
     sound: true,
     look: defaultLook(), // the piano, the player and the place, by name (see looks.js)
     corrections: { fingers: {}, hands: {} },
-    lesson: null, // { from, to, stage, phase }: the passage being learnt (see lesson.js), or none
+    lesson: null, // the learning module's own record of the lesson under way (learning.js), kept as given and never read here
     passage: null, // { from, to, times }: the measures Play plays, and how many times (null: over and over), instead of the piece from here on
     pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note] }
     command: null, // { seq, type }: the last thing an agent asked the page to do
@@ -66,6 +65,19 @@ export function cleanHandMoves(value) {
     }
   }
   return clean;
+}
+
+// Something a module keeps in the workspace for itself: any small object of
+// plain data, stored as given. Null when it is not one, or is too big.
+const BLOB_LIMIT = 4000; // characters of JSON
+export function cleanBlob(value) {
+  if (!isObject(value)) return null;
+  try {
+    const text = JSON.stringify(value);
+    return text.length <= BLOB_LIMIT ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
 }
 
 // A stretch of measures for Play to keep to: measure indexes from 0, and how
@@ -129,7 +141,7 @@ export function cleanState(value) {
   if (isObject(value.corrections)) {
     state.corrections = { fingers: cleanFingers(value.corrections.fingers), hands: cleanHandMoves(value.corrections.hands) };
   }
-  state.lesson = cleanLesson(value.lesson);
+  state.lesson = cleanBlob(value.lesson);
   state.passage = cleanPassage(value.passage);
   if (isObject(value.pose)) for (const hand of ["left", "right"]) state.pose[hand] = cleanPose(value.pose[hand]);
   if (isObject(value.command) && COMMANDS.includes(value.command.type)) {

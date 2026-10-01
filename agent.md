@@ -94,7 +94,7 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
 | `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`. Measure indexes count from 0. See "Playing a passage". |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
-| `lesson` | The passage being learnt, or `null`: `{ "from": <measure index>, "to": <measure index>, "stage": "right" \| "left" \| "both", "phase": "intro" \| "position" \| "show" \| "once" \| "ramp" }`. Measure indexes count from 0. See "Lessons". |
+| `lesson` | The learning module's own record of the lesson under way, or `null`. The workspace stores it as given and does not read it; the page's learning module does. See "Lessons". |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -184,8 +184,7 @@ Each go starts on the beat the last one ended on. After the last, `playing`
 goes false; with `"times": null` it loops until stopped. The measures are
 tinted in the notation. While `passage` is set, Play plays it again; send
 `"passage": null` to give Play the whole piece back. `hands` chooses which
-hand is seen and heard, as always. A lesson has its own passage and takes
-precedence.
+hand is seen and heard, as always. A lesson works through this same field.
 
 ## Posing a hand
 
@@ -208,30 +207,39 @@ curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
 
 ## Lessons
 
-A lesson opens with `phase: "intro"`: the whole passage, both hands, once,
-at nine tenths of the score's tempo, after which the page moves on by itself.
-It then takes the measures through three stages, `right` hand, then
-`left`, then `both`, and each stage through four phases: `position` (the
-voice places the hand a finger at a time; nothing plays), `show` (the voice
-names the notes in order, the hand playing each, then the passage is played
-twice to watch), `once` (the passage plays through once, slowly, about half
-the score's tempo, for the person to play along) and `ramp` (the
-passage loops, and each "got it" adds three beats a minute until the score's
-own tempo). The practice tempo is the workspace's ordinary `tempo`; the hands
-shown and heard are the ordinary `hands`; the placing phase writes `pose` as
-each finger is named and clears it after; Play plays the passage, once or on a
-loop as the phase has it. The page keeps the camera straight over the hands,
-says what to do through a voice, and the person presses "Got it" to move on.
-To start one, set it up the way the page does:
+Learning is a module on the page (`learning.js`). It works the page only
+through the fields in this manual — `tempo`, `hands`, `time`, `camera`,
+`pose`, `passage`, `playing` — and keeps one thing of its own in the
+workspace: `lesson`, which the server stores as given and never reads. As
+the module is now, a lesson is
 
 ```json
-{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "intro" }, "time": 8, "tempo": 108, "hands": { "left": { "show": true, "sound": true }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+{ "from": 2, "to": 5, "stage": "right", "phase": "intro", "score": "<score id>" }
 ```
 
-The lead browser then talks the phase through and, in a phase that plays,
-starts playing. Change `phase` or `stage` (with `hands`, `tempo` and `time` to
-match) to move on; send `"lesson": null` to stop. Opening another score clears
-the lesson.
+`from` and `to` are measure indexes from 0; `stage` is `right`, `left` or
+`both`; `phase` is `intro` (the whole passage, both hands, once, at nine
+tenths of the score's tempo, after which the page moves on by itself),
+`position` (the voice places the hand a finger at a time, writing `pose`),
+`show` (the notes named, the hand playing each, then the passage played twice
+to watch), `once` (the passage once, slowly, for the person to play along) or
+`ramp` (the passage looping, three beats a minute faster at each "got it"
+until the score's own tempo). The shape may change with the module; treat it
+as the module's, not as an API.
+
+At each phase the module sets `passage` to the lesson's measures and how many
+times the phase plays them, `hands` to the hand being learnt, `time` to the
+start of the passage and `tempo` to the practice tempo, so you can read where
+a lesson stands from those. To start a lesson from outside, write what the
+page writes:
+
+```json
+{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "intro", "score": "<score id>" }, "passage": { "from": 2, "to": 5, "times": 1 }, "time": 8, "tempo": 108, "hands": { "left": { "show": true, "sound": true }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+```
+
+The lead browser talks each phase through and, in a phase that plays, starts
+playing. Send `"lesson": null, "passage": null` to stop. A lesson on a piece
+that is no longer the one open is dropped by the page.
 
 `POST /api/workspaces/<id>/speech` with `{ "text": "…" }` answers that text
 read aloud as MP3, from the voice the site is set up with (up to 1500

@@ -306,16 +306,16 @@ test("the manual is served, and PUT replaces the whole state", async () => {
   });
 });
 
-test("a lesson is part of the state, and a null takes it away", () => {
-  let state = mergeState(defaultState(), { lesson: { from: 2, to: 5, stage: "left", phase: "ramp" } });
-  assert.deepEqual(state.lesson, { from: 2, to: 5, stage: "left", phase: "ramp" });
-  state = mergeState(state, { lesson: { stage: "both", phase: "once" } });
-  assert.deepEqual(state.lesson, { from: 2, to: 5, stage: "both", phase: "once" }, "a partial change keeps the rest");
+test("the workspace keeps a module's lesson as given, without reading it", () => {
+  let state = mergeState(defaultState(), { lesson: { from: 2, to: 5, stage: "left", phase: "a phase nobody has thought of yet", extra: { deep: [1, 2] } } });
+  assert.deepEqual(state.lesson, { from: 2, to: 5, stage: "left", phase: "a phase nobody has thought of yet", extra: { deep: [1, 2] } });
+  state = mergeState(state, { lesson: { stage: "both" } });
+  assert.equal(state.lesson.stage, "both");
+  assert.equal(state.lesson.from, 2, "a partial change keeps the rest");
   state = mergeState(state, { lesson: null });
   assert.equal(state.lesson, null);
-  assert.equal(cleanState({ lesson: { from: 4, to: 2 } }).lesson, null, "a range that ends before it starts is no lesson");
-  assert.deepEqual(cleanState({ lesson: { from: "1", to: 1.5 } }).lesson, null);
-  assert.deepEqual(cleanState({ lesson: { from: 1, to: 1, stage: "feet" } }).lesson, { from: 1, to: 1, stage: "right", phase: "intro" });
+  assert.equal(cleanState({ lesson: "later" }).lesson, null, "only an object is kept");
+  assert.equal(cleanState({ lesson: { notes: "x".repeat(5000) } }).lesson, null, "and only a small one");
 });
 
 test("the voice reads a line once and keeps it, behind the workspace token", async () => {

@@ -9,14 +9,14 @@ import { applyHandMoves, countCorrections } from "./corrections.js";
 import { applyChoices, HANDS } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
-import { advanceLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, introTempo, lessonHands, lessonRange, lessonSteps, OVERHEAD, phaseLines, phasePlays, stageHands } from "./lesson.js";
+import { mountLearning } from "./learning.js";
+import { passageRange, passageSteps } from "./passage.js";
 import { PianoAudio } from "./piano-audio.js";
 import { LOOK_KINDS, LOOKS } from "./looks.js";
 import { readMxl } from "./mxl.js";
 import { parseScore } from "./score-model.js";
 import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js";
 import { ScoreTransport } from "./score-transport.js";
-import { Narrator, serverSpeech } from "./speech.js";
 import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
 import { LIMITS } from "./workspace-model.js";
 
@@ -40,19 +40,6 @@ const tempoSlider = document.querySelector("#tempo");
 const tempoOutput = document.querySelector("#tempo-output");
 const tempoTicks = document.querySelector("#tempo-ticks");
 const handChoice = document.querySelector(".hand-choice");
-const learnButton = document.querySelector("#learn");
-const lessonPanel = {
-  root: document.querySelector("#lesson"),
-  kicker: document.querySelector("#lesson-kicker"),
-  progress: document.querySelector("#lesson-progress"),
-  caption: document.querySelector("#lesson-caption"),
-  next: document.querySelector("#lesson-next"),
-  stop: document.querySelector("#lesson-stop"),
-  play: document.querySelector("#lesson-play"),
-  restart: document.querySelector("#lesson-restart"),
-  again: document.querySelector("#lesson-again"),
-};
-const lessonPick = { root: document.querySelector("#lesson-pick"), text: document.querySelector("#lesson-pick-text") };
 const bar = {
   connect: document.querySelector("#workspace-connect"),
   home: document.querySelector("#workspace-home"),
@@ -80,7 +67,8 @@ const page = {
   fullScreen: false, // the piano fills the window, under the line of music being played
   bands: null, // where each line of music sits in the notation as drawn; worked out when asked for
   measureShown: null, // the measure the hands were last shown in
-  picking: null, // choosing a passage to learn: { from, to, anchor } in measure indexes; anchor is the end clicked first, while the other is awaited
+  tint: null, // measures a module has asked to be tinted in the notation: { from, to, strong }
+  measureHook: null, // a module's say in what a click or the pointer on a measure does: { click(index), hover(index) }
   poseArrived: false, // a told pose has just changed, so its pressed keys are struck
   notes: [],
   doubts: [],
@@ -203,7 +191,6 @@ function refinger(corrections) {
 // Fetches and reads one of the workspace's scores. Returns false if it cannot.
 async function loadScore(score) {
   stopTransport();
-  showPicking(null);
   if (!score) {
     page.score = null;
     page.xml = null;
@@ -421,7 +408,7 @@ async function renderNotation(xmlText) {
       page.cursorAt = null;
       page.bands = null;
       drawStaffGuides();
-      drawLessonRange();
+      drawTint();
       showScoreStrip();
     };
   }
@@ -552,16 +539,17 @@ function measureAtPoint(clientX, clientY) {
   return measureBoxes().find((box) => x >= box.left && x <= box.right && y >= box.top - 3 && y <= box.bottom + 3)?.index ?? null;
 }
 
-// The passage being learnt, or being chosen, is tinted in the notation.
-function drawLessonRange() {
+// The measures Play keeps to are tinted in the notation, or whichever a
+// module has asked for (app.tint).
+function drawTint() {
   const svg = scoreContainer.querySelector("svg");
   if (!svg) return;
-  svg.querySelector(".lesson-range")?.remove();
-  const range = page.picking ?? ws?.state?.lesson ?? ws?.state?.passage;
+  svg.querySelector(".measure-tint")?.remove();
+  const range = page.tint ?? ws?.state?.passage;
   if (!range || !page.osmd?.GraphicSheet) return;
   const unit = 10 * (page.osmd.zoom ?? 1);
   const layer = document.createElementNS(SVG_NS, "g");
-  layer.setAttribute("class", "lesson-range");
+  layer.setAttribute("class", "measure-tint");
   layer.setAttribute("pointer-events", "none");
   const boxes = measureBoxes();
   for (const box of boxes) {
@@ -575,27 +563,24 @@ function drawLessonRange() {
     rect.setAttribute("width", ((box.right - box.left) * unit).toFixed(1));
     rect.setAttribute("height", ((bottom - box.top + 4) * unit).toFixed(1));
     rect.setAttribute("fill", "#e9a63a");
-    rect.setAttribute("fill-opacity", page.picking ? "0.3" : "0.16");
+    rect.setAttribute("fill-opacity", page.tint?.strong ? "0.3" : "0.16");
     layer.append(rect);
   }
   svg.prepend(layer); // under the notes
 }
 
+// A click on a measure goes there, unless a module has taken measure clicks.
 scoreContainer.addEventListener("click", (event) => {
   const index = measureAtPoint(event.clientX, event.clientY);
   if (index === null) return;
-  if (page.picking) {
-    pickMeasure(index);
-    return;
-  }
+  if (page.measureHook?.click?.(index)) return;
   const measure = page.score?.measures[index];
   if (measure) goToTime(measure.start);
 });
-// With one end chosen, the passage stretches to the measure under the pointer.
 scoreContainer.addEventListener("mousemove", (event) => {
-  if (page.picking?.anchor === null || page.picking?.anchor === undefined) return;
+  if (!page.measureHook?.hover) return;
   const index = measureAtPoint(event.clientX, event.clientY);
-  if (index !== null) showPicking({ from: Math.min(page.picking.anchor, index), to: Math.max(page.picking.anchor, index), anchor: page.picking.anchor });
+  if (index !== null) page.measureHook.hover(index);
 });
 
 // ---------------------------------------------------------------------------
@@ -719,7 +704,7 @@ function showScores() {
 // Points the workspace at another of its pieces. Corrections are by moment,
 // so they stay behind with the piece they were made for.
 function chooseScore({ id, title }) {
-  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null }, lesson: null, passage: null, pose: { left: null, right: null } });
+  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null }, passage: null, pose: { left: null, right: null } });
 }
 
 scoreTitle.addEventListener("click", () => dialogs.song.showModal());
@@ -866,9 +851,7 @@ const transport = new ScoreTransport({
   done: () => {
     showPlaying(false);
     ws.change({ playing: false });
-    // The introduction, once heard, goes straight on to the first hand.
-    if (ws.state?.lesson?.phase === "intro") gotIt();
-    else if (ws.state?.lesson) voice.say(describePlayed(ws.state.lesson.phase));
+    app.dispatchEvent(new Event("played"));
   },
 });
 
@@ -904,9 +887,9 @@ async function startTransport() {
   }
   if (serial !== preparationSerial || !prepared || ws !== client || page.steps !== steps || !client.lead || !ws?.state?.playing || transport.playing) return;
   lastSharedTime = -Infinity;
-  const passage = lessonPassage();
+  const passage = passageToPlay();
   if (passage) {
-    // A lesson plays its passage, once or over and over, from wherever in it the music is.
+    // A passage plays as often as it says, from wherever in it the music is.
     const inside = page.stepIndex >= passage.first && page.stepIndex <= passage.last;
     transport.start(inside ? page.stepIndex : passage.first, { last: passage.last, loop: passage.loop });
   } else {
@@ -1010,227 +993,46 @@ handsStage.addEventListener("noteoff", (event) => {
 });
 
 // ---------------------------------------------------------------------------
-// Learning: a passage of the piece, one hand at a time and then both, slowly
-// and then faster (lesson.js). The lesson is in the workspace; the voice and
-// the looping playback are this browser's doing.
+// Playing a passage: a stretch of measures, as often as asked
 
-// The panel shows what has been said in the phase so far, a line at a time.
-const voice = new Narrator({
-  fetchSpeech: serverSpeech(() => ws),
-  onLine: (line) => {
-    lessonPanel.caption.textContent = lessonPanel.caption.textContent ? `${lessonPanel.caption.textContent} ${line}` : line;
-  },
-});
-function sayAfresh(lines) {
-  voice.stop();
-  lessonPanel.caption.textContent = "";
-  return voice.sayAll(Array.isArray(lines) ? lines : [lines]);
+// The workspace's `passage` as steps to play and how often to go round, or
+// null when Play just plays the piece.
+function passageToPlay() {
+  const passage = ws?.state?.passage;
+  if (!passage || !page.score) return null;
+  const span = passageRange(passage, page.score.measures);
+  const steps = span && passageSteps(span, page.steps);
+  if (!steps) return null;
+  return { ...steps, loop: passage.times === 1 ? null : { from: span.start, to: span.end, times: passage.times } };
 }
 
-const scoreTempo = () => page.score?.tempo ?? DEFAULT_TEMPO;
-const lessonKey = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.stage}:${lesson.phase}` : null);
-
-// The stretch of the piece Play keeps to, as steps and how often to go round:
-// the lesson's passage, as many times as its phase plays it, else the
-// workspace's own `passage`. Null when Play just plays the piece.
-function lessonPassage() {
-  const lesson = ws?.state?.lesson;
-  const range = lesson ?? ws?.state?.passage;
-  if (!range || !page.score) return null;
-  const times = lesson ? phasePlays(lesson.phase) : (range.times ?? Infinity);
-  const span = lessonRange(range, page.score.measures);
-  const steps = span && lessonSteps(span, page.steps);
-  if (!steps) return null;
-  return { ...steps, loop: times > 1 ? { from: span.start, to: span.end, times: Number.isFinite(times) ? times : null } : null };
+// Starts playing from a time in the piece, here, whatever was playing.
+function playFrom(time, patch = {}) {
+  if (!ws?.state) return;
+  stopTransport();
+  if (!ws.lead) ws.claimLead().catch(() => {});
+  ws.change({ ...patch, time, playing: true });
 }
 
 // Plays measures `from` to `to` (indexes from 0), `times` times (null: over
 // and over), at `tempo` if one is given. Stays the passage Play plays until
-// cleared with clearPassage() or a lesson takes over.
+// cleared with clearPassage().
 function playPassage(from, to = from, { times = 1, tempo = null } = {}) {
-  if (!page.score || !ws?.state) return;
+  if (!page.score) return;
   const passage = { from: Math.min(from, to), to: Math.max(from, to), times };
-  const span = lessonRange(passage, page.score.measures);
-  stopTransport();
-  if (!ws.lead) ws.claimLead().catch(() => {});
-  ws.change({ passage, time: span.start, playing: true, ...(tempo ? { tempo } : {}) });
+  playFrom(passageRange(passage, page.score.measures).start, { passage, ...(tempo ? { tempo } : {}) });
 }
 
 function clearPassage() {
   ws?.change({ passage: null });
 }
 
-// Puts the hands on a step without sounding it, as before playing from there.
-function cueStep(index) {
-  if (index === page.stepIndex) return;
-  page.stepIndex = index;
-  shown.stepIndex = index;
-  showHands({ strike: false });
-  moveCursorTo(page.steps[index].time);
-}
-
-// Plays a moment of the score as the voice names it.
+// Shows and sounds one moment of the piece, where it stands.
 function playMoment(time) {
-  if (transport.playing) return;
+  if (!ws?.state || transport.playing) return;
   if (stepIndexAt(time) === page.stepIndex) replay("together");
   else ws.change({ time }); // a jump is shown at once, with sound
 }
-
-// Choosing the passage in the notation. The measure on screen and the few
-// after it are offered; a click on a measure starts the passage there, and
-// a second click ends it (in either direction).
-function offerLesson() {
-  if (!page.score || !ws?.state) return;
-  const { measures } = page.score;
-  const here = page.steps[page.stepIndex]?.measure;
-  const offered = defaultLesson(Math.max(0, measures.findIndex((measure) => measure.number === here)), measures.length);
-  if (ws.state.playing) ws.change({ playing: false });
-  showPicking({ from: offered.from, to: offered.to, anchor: null });
-}
-
-function showPicking(picking) {
-  const changed = !page.picking || !picking || page.picking.from !== picking.from || page.picking.to !== picking.to;
-  page.picking = picking;
-  document.body.classList.toggle("picking-lesson", Boolean(picking));
-  lessonPick.root.hidden = !picking;
-  if (!ws?.state?.lesson) learnButton.setAttribute("aria-pressed", String(Boolean(picking)));
-  if (picking) {
-    const number = (index) => page.score.measures[index].number;
-    const chosen = picking.from === picking.to ? `Measure ${number(picking.from)}` : `Measures ${number(picking.from)}–${number(picking.to)}`;
-    lessonPick.text.textContent = picking.anchor === null ? `${chosen}. Click a measure to start somewhere else.` : `${chosen}. Now click the last measure.`;
-  }
-  if (changed) drawLessonRange();
-}
-
-function pickMeasure(index) {
-  const { anchor } = page.picking;
-  if (anchor === null) showPicking({ from: index, to: index, anchor: index });
-  else showPicking({ from: Math.min(anchor, index), to: Math.max(anchor, index), anchor: null });
-}
-
-function startPicked() {
-  const { from, to } = page.picking;
-  showPicking(null);
-  startLesson(from, to);
-}
-
-// Puts the workspace at the start of the passage, one hand, slow, seen from
-// above. The stage change is narrated and then played by showLesson().
-function startLesson(from, to) {
-  const lesson = { from: Math.min(from, to), to: Math.max(from, to), stage: "right", phase: "intro" };
-  const range = lessonRange(lesson, page.score.measures);
-  if (!range) return;
-  if (!ws.lead) ws.claimLead().catch(() => {});
-  const camera = { ...ws.state.camera, view: { ...OVERHEAD }, autoCut: false };
-  ws.change({ lesson, time: range.start, tempo: introTempo(scoreTempo()), hands: lessonHands(lesson), camera, playing: false, pose: NO_POSE, passage: null });
-  handsView.setCamera(camera); // a local change is not laid back on the stage by applyLatest()
-}
-
-function stopLesson() {
-  if (!ws?.state?.lesson) return;
-  ws.change({ lesson: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE });
-}
-
-// "Got it": the next phase, or a little faster, or the next hand, or done.
-function gotIt() {
-  const lesson = ws?.state?.lesson;
-  if (!lesson || !page.score) return;
-  const target = scoreTempo();
-  const next = advanceLesson(lesson, page.tempo, target);
-  if (["breakdown", "show", "once", "ramp", "stage"].includes(next.event)) {
-    // A new phase: back to the top of the passage, quiet, the hands back to the score's, for the voice to introduce it (showLesson).
-    const range = lessonRange(next.lesson, page.score.measures);
-    ws.change({ lesson: next.lesson, tempo: next.tempo, hands: lessonHands(next.lesson), time: range.start, playing: false, pose: NO_POSE });
-    return;
-  }
-  if (next.event === "done") ws.change({ lesson: null, tempo: target, hands: stageHands("both"), playing: false, pose: NO_POSE });
-  else ws.change({ lesson: next.lesson, tempo: next.tempo }); // the music, if playing, follows the new tempo where it is
-  sayAfresh(describeAdvance(next.event, { tempo: next.tempo, target }));
-}
-
-const NO_POSE = { left: null, right: null };
-
-// Talks the phase through, then plays the passage if the phase plays it.
-// While the hand is placed, each finger named goes to its key on the stage.
-function narratePhase(lesson, { thenPlay = true } = {}) {
-  const client = ws;
-  const key = lessonKey(lesson);
-  const current = () => ws === client && lessonKey(client.state?.lesson) === key;
-  const lines = phaseLines(lesson, { score: page.score, positions: page.positions, events: page.events, tempo: page.tempo, target: scoreTempo() }).map((line) => {
-    if (line?.pose) return { say: line.say, before: () => current() && client.change({ pose: line.pose }) };
-    if (line?.time !== undefined) return { say: line.say, before: () => current() && playMoment(line.time) };
-    return line;
-  });
-  sayAfresh(lines).then((ending) => {
-    if (!thenPlay || !phasePlays(lesson.phase) || ending === "dropped" || !current() || client.state.playing) return;
-    if (!client.lead) client.claimLead().catch(() => {});
-    // From the top of the passage, wherever naming the notes left the hands.
-    player.stop();
-    const passage = lessonPassage();
-    if (passage) cueStep(passage.first);
-    client.change({ playing: true, ...(passage ? { time: page.steps[passage.first].time } : {}) });
-  });
-}
-
-// The passage from the top; played, in a phase that plays it.
-function restartLesson() {
-  const lesson = ws?.state?.lesson;
-  if (!lesson || !page.score) return;
-  const range = lessonRange(lesson, page.score.measures);
-  stopTransport();
-  const playing = Boolean(phasePlays(lesson.phase));
-  if (playing && !ws.lead) ws.claimLead().catch(() => {});
-  ws.change({ time: range.start, playing });
-}
-
-// Lays the workspace's lesson on the screen. When a stage begins, the browser
-// that began it (or the lead, when an agent did) talks it through, then plays.
-function showLesson(state, { by, local }) {
-  const client = ws;
-  const { lesson } = state;
-  const target = scoreTempo();
-  lessonPanel.root.hidden = !lesson;
-  learnButton.setAttribute("aria-pressed", String(Boolean(lesson)));
-  learnButton.textContent = lesson ? "Learning…" : "Learn";
-  if (lesson) {
-    const range = lessonRange(lesson, page.score.measures);
-    lessonPanel.kicker.textContent = range.from === range.to ? `Learning measure ${range.from}` : `Learning measures ${range.from}–${range.to}`;
-    lessonPanel.progress.textContent = describeProgress(lesson, { tempo: page.tempo, target });
-    lessonPanel.next.textContent = describeNext(lesson, { tempo: page.tempo, target });
-    lessonPanel.play.textContent = state.playing ? "⏸ Pause" : "▶ Play";
-    lessonPanel.play.title = state.playing ? "Pause the passage" : phasePlays(lesson.phase) === Infinity ? "Play the passage on a loop" : "Play the passage";
-  }
-  const rangeKey = JSON.stringify([lesson?.from, lesson?.to, state.passage?.from, state.passage?.to]);
-  if (rangeKey !== shown.lessonRange) {
-    shown.lessonRange = rangeKey;
-    drawLessonRange();
-  }
-  const key = lessonKey(lesson);
-  if (key === shown.lesson) return;
-  const wasOn = Boolean(shown.lesson);
-  shown.lesson = key;
-  if (!lesson) {
-    if (wasOn && !(local || by === client.client)) voice.stop(); // ended elsewhere; the "well done" of a local finish is left to play out
-    lessonPanel.caption.textContent = "";
-    return;
-  }
-  if (!(local || (client.lead && by !== client.client))) return;
-  narratePhase(lesson);
-}
-
-learnButton.addEventListener("click", () => (ws?.state?.lesson ? stopLesson() : page.picking ? showPicking(null) : offerLesson()));
-document.querySelector("#lesson-start").addEventListener("click", startPicked);
-document.querySelector("#lesson-cancel").addEventListener("click", () => showPicking(null));
-lessonPanel.next.addEventListener("click", gotIt);
-lessonPanel.stop.addEventListener("click", stopLesson);
-lessonPanel.play.addEventListener("click", togglePlaying);
-lessonPanel.restart.addEventListener("click", restartLesson);
-lessonPanel.again.addEventListener("click", () => {
-  const lesson = ws?.state?.lesson;
-  if (!lesson) return;
-  if (lesson.phase === "position") ws.change({ pose: NO_POSE });
-  narratePhase(lesson, { thenPlay: !ws.state.playing });
-});
 
 // What an agent can ask the page to do.
 function runCommand(type) {
@@ -1243,18 +1045,20 @@ document.querySelector("#step-first").addEventListener("click", () => goToStep(0
 document.querySelector("#step-prev").addEventListener("click", () => goToStep(page.stepIndex - 1));
 document.querySelector("#step-next").addEventListener("click", () => goToStep(page.stepIndex + 1));
 
+const keyHandlers = [];
 window.addEventListener("keydown", (event) => {
   // Leave typing, lists and sliders alone, and let Space and Enter work a
   // focused button or tick box. Anything else is a shortcut, wherever focus is.
   const target = event.target;
   const ticks = target.matches("input") && ["checkbox", "radio"].includes(target.type);
   if (target.matches("select, textarea") || (target.matches("input") && !ticks)) return;
-  // While a passage is being chosen, Enter takes it and Escape drops it, whatever has focus.
-  if (page.picking && (event.key === "Enter" || event.key === "Escape") && !document.querySelector("dialog[open]")) {
-    if (event.key === "Enter") startPicked();
-    else showPicking(null);
-    event.preventDefault();
-    return;
+  // A module may take a key first (app.onKey); it is told when the key would otherwise work a focused control.
+  if (ws?.state && !document.querySelector("dialog[open]") && !(event.metaKey || event.ctrlKey || event.altKey)) {
+    const onControl = target.matches("button, summary, a, input") && (event.key === " " || event.key === "Enter");
+    if (keyHandlers.some((handle) => handle(event, { onControl }))) {
+      event.preventDefault();
+      return;
+    }
   }
   if (target.matches("button, summary, a, input") && (event.key === " " || event.key === "Enter")) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -1268,8 +1072,6 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
   else if (event.key === "n" || event.key === "N") ws.change({ numbers: !ws.state.numbers });
   else if (event.key === "f" || event.key === "F") setFullScreen(!page.fullScreen);
-  else if (event.key === "l" || event.key === "L") (page.picking ? showPicking(null) : ws.state.lesson ? null : offerLesson());
-  else if (event.key === "g" || event.key === "G") gotIt();
   else if (event.key === "Escape" && page.fullScreen) setFullScreen(false);
   else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
   else return;
@@ -1364,7 +1166,8 @@ async function applyLatest() {
     shown.stepIndex = index;
     // The transport draws its own steps; a jump from elsewhere is shown at once, with sound.
     if (!transport.playing) {
-      renderHands({ jump: first || refingered, sound: !first && !refingered });
+      // Not sounded when the piece is about to play from here: the transport sounds it on its beat.
+      renderHands({ jump: first || refingered, sound: !first && !refingered && !state.playing });
       moveCursorTo(page.steps[index]?.time ?? 0);
     }
   } else if (handsChanged) showHands({ strike: false });
@@ -1383,7 +1186,11 @@ async function applyLatest() {
     }
   }
   if (refingered) showSummary();
-  showLesson(state, { by, local });
+  const passageKey = JSON.stringify(state.passage);
+  if (passageKey !== shown.passage) {
+    shown.passage = passageKey;
+    drawTint();
+  }
 
   // The camera is the stage's own while this browser moves it.
   if (!local) handsView.setCamera(state.camera, { immediate: first });
@@ -1402,6 +1209,8 @@ async function applyLatest() {
   }
 
   if (!local && by && by !== client.client) setWorkspaceStatus(`Changed by ${by}`, "agent");
+  // Modules hear of the state once it is on the screen.
+  app.dispatchEvent(new CustomEvent("state", { detail: { state, local: Boolean(local), own: Boolean(local) || by === client.client, lead: client.lead } }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1413,7 +1222,7 @@ const hashFor = (entry) => `#ws=${entry.id}&token=${entry.token}`;
 async function openWorkspace({ id, token }) {
   stopTransport();
   player.stop();
-  voice.stop();
+  app.dispatchEvent(new Event("reset"));
   ws?.close();
   const client = new WorkspaceClient({ id, token });
   ws = client;
@@ -1515,5 +1324,77 @@ window.addEventListener("hashchange", () => {
   if (entry && entry.id !== ws?.id) openWorkspace(entry).catch((error) => setWorkspaceStatus(`That workspace could not be opened: ${error.message}`, "outside"));
 });
 
-window.musichands = { page, view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
+// ---------------------------------------------------------------------------
+// The seam: what a module on this page may use. A module (learning.js is the
+// one there is) is handed this and nothing else: it reads the music and the
+// workspace, changes the workspace through the same fields an agent can, and
+// asks for a few things only a page can do. Nothing above knows what a
+// module does with them.
+//
+//   Reading
+//     state               the workspace state as it stands, or null
+//     score               the piece as read: { title, measures, tempo }, or null
+//     events, positions   the fingered timeline and hand positions (fingering.js)
+//     tempo, scoreTempo   the tempo in force, and the score's own
+//     measureIndex        the measure on screen, by index from 0
+//   Changing
+//     change(patch)       lays a change over the workspace (workspace-model.js)
+//     playFrom(time, patch)  plays from there, here, with a change if given
+//     togglePlaying()     what the Play button does
+//     playMoment(time)    shows and sounds one moment of the piece
+//   The page
+//     speech(text)        that text read aloud, as a Blob; null if the site has no voice
+//     tint(range)         tints measures { from, to, strong } in the notation; null to stop
+//     onMeasure(hook)     takes measure clicks and hovers: { click(index) → true if taken, hover(index) }; null to give them back
+//     onKey(handler)      is offered each shortcut key first: handler(event, { onControl }) → true if taken
+//   Events
+//     "state"   { state, local, own, lead }: a state has been laid on the screen;
+//               `local` when this browser just made the change, `own` when it
+//               was this browser's at all, `lead` when this browser plays the music
+//     "played"  what was playing here has played out
+//     "reset"   the page is turning to another workspace
+const app = Object.assign(new EventTarget(), {
+  playFrom,
+  togglePlaying,
+  playMoment,
+  change(patch) {
+    if (!ws?.state) return;
+    ws.change(patch);
+    if (patch.camera) handsView.setCamera(ws.state.camera); // a local change is not laid back on the stage by applyLatest()
+  },
+  async speech(text) {
+    if (!ws) return null;
+    const response = await fetch(`${ws.base}/api${ws.path}/speech`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${ws.token}` }, body: JSON.stringify({ text }) });
+    if (response.status === 503) return null;
+    if (!response.ok) throw new Error(`the voice answered ${response.status}`);
+    return response.blob();
+  },
+  tint(range) {
+    page.tint = range;
+    drawTint();
+  },
+  onMeasure(hook) {
+    page.measureHook = hook;
+  },
+  onKey(handler) {
+    keyHandlers.push(handler);
+  },
+});
+Object.defineProperties(app, {
+  state: { get: () => ws?.state ?? null },
+  score: { get: () => page.score },
+  events: { get: () => page.events },
+  positions: { get: () => page.positions },
+  tempo: { get: () => page.tempo },
+  scoreTempo: { get: () => page.score?.tempo ?? DEFAULT_TEMPO },
+  measureIndex: {
+    get: () => {
+      const number = page.steps[page.stepIndex]?.measure;
+      return Math.max(0, page.score?.measures.findIndex((measure) => measure.number === number) ?? 0);
+    },
+  },
+});
+mountLearning(app);
+
+window.musichands = { page, app, view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
 await openFirstWorkspace();

@@ -219,7 +219,7 @@ class Workspaces {
     const open = record.state.score?.id === scoreId;
     record.scores = record.scores.filter((entry) => entry.id !== scoreId);
     await unlink(this.scoreFile(record.id, scoreId)).catch(() => {});
-    return this.patch(record, open ? { state: { time: 0, playing: false, corrections: { fingers: null, hands: null }, lesson: null, passage: null, pose: { left: null, right: null } } } : {}, by);
+    return this.patch(record, open ? { state: { time: 0, playing: false, corrections: { fingers: null, hands: null }, passage: null, pose: { left: null, right: null } } } : {}, by);
   }
 
   async write(record) {

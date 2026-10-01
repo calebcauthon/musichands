@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assignFingering } from "../fingering.js";
-import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, FINGER_PAUSE, introTempo, lessonHands, lessonRange, lessonSteps, phaseLines, phasePlays, slowTempo, spokenNote, stageHands } from "../lesson.js";
+import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, FINGER_PAUSE, introTempo, lessonHands, lessonPassage, lessonRange, lessonSteps, phaseLines, phasePlays, slowTempo, spokenNote, stageHands } from "../lesson.js";
 import { parseScore } from "../score-model.js";
 import { readFile } from "node:fs/promises";
 
@@ -159,4 +159,14 @@ test("the panel says where the lesson is and what got it will do", () => {
   assert.equal(describeProgress({ ...lesson, phase: "ramp" }, { tempo: 72, target: 72 }), "Right hand · at full tempo, 72");
   assert.equal(describeNext({ ...lesson, phase: "ramp" }, { tempo: 72, target: 72 }), "✓ Got it · next hand");
   assert.equal(describeNext({ ...lesson, stage: "both", phase: "ramp" }, { tempo: 72, target: 72 }), "✓ Got it · finish");
+});
+
+test("each phase says what Play keeps to: the lesson's measures, as often as the phase plays them", () => {
+  const lesson = { from: 2, to: 5, stage: "right", phase: "intro" };
+  assert.deepEqual(lessonPassage(lesson), { from: 2, to: 5, times: 1 });
+  assert.deepEqual(lessonPassage({ ...lesson, phase: "position" }), { from: 2, to: 5, times: 1 }, "nothing plays by itself, but Play still keeps to the passage");
+  assert.deepEqual(lessonPassage({ ...lesson, phase: "show" }), { from: 2, to: 5, times: 2 });
+  assert.deepEqual(lessonPassage({ ...lesson, phase: "once" }), { from: 2, to: 5, times: 1 });
+  assert.deepEqual(lessonPassage({ ...lesson, phase: "ramp" }), { from: 2, to: 5, times: null }, "over and over");
+  assert.equal(cleanLesson({ ...lesson, score: "abc" }).score, "abc", "a lesson remembers the piece it is on");
 });

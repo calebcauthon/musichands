@@ -157,19 +157,3 @@ export class Narrator {
     for (const entry of dropped) entry.resolve("dropped");
   }
 }
-
-// Asks the server's voice to read a line, as a Blob; null when it has none.
-export function serverSpeech(ws) {
-  return async (text) => {
-    const client = ws();
-    if (!client) return null;
-    const response = await fetch(`${client.base}/api${client.path}/speech`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${client.token}` },
-      body: JSON.stringify({ text }),
-    });
-    if (response.status === 503) return null;
-    if (!response.ok) throw new Error(`the voice answered ${response.status}`);
-    return response.blob();
-  };
-}
