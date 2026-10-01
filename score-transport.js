@@ -17,7 +17,8 @@ export class ScoreTransport {
     this.anchor = null; // a step's score time pinned to a moment on the clock
     this.index = 0;
     this.last = 0; // the last step to play
-    this.loop = null; // { from, to }: score times; when `to` falls due the passage starts again from `from`
+    this.loop = null; // { from, to, times }: score times; when `to` falls due the passage starts again from `from`
+    this.passes = 0; // how many times the passage has been played through
     this.audioTimer = null;
   }
 
@@ -28,7 +29,8 @@ export class ScoreTransport {
 
   // Plays from step `index` to the end, or to step `last`. With `loop`, the
   // passage between the score times `loop.from` and `loop.to` plays over and
-  // over, each go starting on the beat the last one ended on.
+  // over, each go starting on the beat the last one ended on; `loop.times`
+  // stops it after that many goes.
   start(index = 0, { last = null, loop = null } = {}) {
     this.stop();
     const steps = this.steps();
@@ -37,6 +39,7 @@ export class ScoreTransport {
     this.index = Math.min(Math.max(0, index), this.last);
     this.first = this.index;
     this.loop = loop;
+    this.passes = 0;
     this.playing = true;
     // The first notes land once the hands have had time to reach them.
     this.anchor = { time: steps[this.index].time, at: this.now() + this.reach() };
@@ -101,7 +104,8 @@ export class ScoreTransport {
       if (index + 1 <= this.last) {
         this.index = index + 1;
         this.queue();
-      } else if (this.loop) {
+      } else if (this.loop && (!this.loop.times || this.passes + 1 < this.loop.times)) {
+        this.passes += 1;
         this.index = this.last + 1;
         this.queueLoop();
       } else {
@@ -139,7 +143,7 @@ export class ScoreTransport {
     this.audioIndex = this.audioIndexAt(time);
     this.queueAudio();
     if (this.index <= this.last) this.queue();
-    else if (this.loop) this.queueLoop();
+    else if (this.loop) this.queueLoop(); // only reached while waiting to go again
   }
 
   finish() {

@@ -168,3 +168,12 @@ test("a range without a loop ends after its last step", () => {
   assert.deepEqual(state.log.map((entry) => entry.index), [1, 2]);
   assert.equal(state.finished, 300 + 500 + 500);
 });
+
+test("a passage can be played a set number of times, then it is finished", () => {
+  const { transport, state, advance } = bench({ times: [0, 1, 2, 3], tempo: 120, reach: 300 });
+  transport.start(0, { last: 1, loop: { from: 0, to: 2, times: 2 } });
+  advance(10000);
+  assert.deepEqual(state.log.map((entry) => [entry.index, entry.lands]), [[0, 300], [1, 800], [0, 1300], [1, 1800]]);
+  assert.equal(state.finished, 1800 + 500, "after the second go's last notes have sounded");
+  assert.equal(transport.playing, false);
+});

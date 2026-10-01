@@ -93,7 +93,7 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `corrections.hands` | `{ "<moment>": { "<note>": "left" \| "right" } }`. Gives a note to the other hand at that moment. |
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
-| `lesson` | The passage being learnt, or `null`: `{ "from": <measure index>, "to": <measure index>, "stage": "right" \| "left" \| "both", "phase": "position" \| "once" \| "ramp" }`. Measure indexes count from 0. See "Lessons". |
+| `lesson` | The passage being learnt, or `null`: `{ "from": <measure index>, "to": <measure index>, "stage": "right" \| "left" \| "both", "phase": "position" \| "show" \| "once" \| "ramp" }`. Measure indexes count from 0. See "Lessons". |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -189,9 +189,11 @@ curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
 ## Lessons
 
 A lesson takes a few measures through three stages, `right` hand, then
-`left`, then `both`, and each stage through three phases: `position` (the
-voice places the hand a finger at a time; nothing plays), `once` (the passage
-plays through once, slowly, about half the score's tempo) and `ramp` (the
+`left`, then `both`, and each stage through four phases: `position` (the
+voice places the hand a finger at a time; nothing plays), `show` (the voice
+names the notes in order, the hand playing each, then the passage is played
+twice to watch), `once` (the passage plays through once, slowly, about half
+the score's tempo, for the person to play along) and `ramp` (the
 passage loops, and each "got it" adds three beats a minute until the score's
 own tempo). The practice tempo is the workspace's ordinary `tempo`; the hands
 shown and heard are the ordinary `hands`; the placing phase writes `pose` as

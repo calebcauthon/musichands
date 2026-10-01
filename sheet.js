@@ -9,7 +9,7 @@ import { applyHandMoves, countCorrections } from "./corrections.js";
 import { applyChoices, HANDS } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
-import { advanceLesson, defaultLesson, describeAdvance, describeNext, describeProgress, HEARD_ONCE, lessonRange, lessonSteps, OVERHEAD, phaseLines, phasePlays, slowTempo, stageHands } from "./lesson.js";
+import { advanceLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, lessonRange, lessonSteps, OVERHEAD, phaseLines, phasePlays, slowTempo, stageHands } from "./lesson.js";
 import { PianoAudio } from "./piano-audio.js";
 import { LOOK_KINDS, LOOKS } from "./looks.js";
 import { readMxl } from "./mxl.js";
@@ -819,7 +819,7 @@ const transport = new ScoreTransport({
   done: () => {
     showPlaying(false);
     ws.change({ playing: false });
-    if (ws.state?.lesson?.phase === "once") voice.say(HEARD_ONCE);
+    if (ws.state?.lesson) voice.say(describePlayed(ws.state.lesson.phase));
   },
 });
 
@@ -981,14 +981,32 @@ function sayAfresh(lines) {
 const scoreTempo = () => page.score?.tempo ?? DEFAULT_TEMPO;
 const lessonKey = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.stage}:${lesson.phase}` : null);
 
-// The lesson's passage as steps to play, looping when the phase loops, or
-// null when there is none.
+// The lesson's passage as steps to play, as many times as the phase plays
+// it, or null when there is none.
 function lessonPassage() {
   const lesson = ws?.state?.lesson;
   if (!lesson || !page.score) return null;
   const range = lessonRange(lesson, page.score.measures);
   const steps = range && lessonSteps(range, page.steps);
-  return steps ? { ...steps, loop: phasePlays(lesson.phase) === "loop" ? { from: range.start, to: range.end } : null } : null;
+  if (!steps) return null;
+  const times = phasePlays(lesson.phase);
+  return { ...steps, loop: times > 1 ? { from: range.start, to: range.end, times: Number.isFinite(times) ? times : null } : null };
+}
+
+// Puts the hands on a step without sounding it, as before playing from there.
+function cueStep(index) {
+  if (index === page.stepIndex) return;
+  page.stepIndex = index;
+  shown.stepIndex = index;
+  showHands({ strike: false });
+  moveCursorTo(page.steps[index].time);
+}
+
+// Plays a moment of the score as the voice names it.
+function playMoment(time) {
+  if (transport.playing) return;
+  if (stepIndexAt(time) === page.stepIndex) replay("together");
+  else ws.change({ time }); // a jump is shown at once, with sound
 }
 
 // Offers the measure on screen and the few after it, to change before starting.
@@ -1035,7 +1053,7 @@ function gotIt() {
   if (!lesson || !page.score) return;
   const target = scoreTempo();
   const next = advanceLesson(lesson, page.tempo, target);
-  if (["once", "ramp", "stage"].includes(next.event)) {
+  if (["show", "once", "ramp", "stage"].includes(next.event)) {
     // A new phase: back to the top of the passage, quiet, the hands back to the score's, for the voice to introduce it (showLesson).
     const range = lessonRange(next.lesson, page.score.measures);
     ws.change({ lesson: next.lesson, tempo: next.tempo, hands: stageHands(next.lesson.stage), time: range.start, playing: false, pose: NO_POSE });
@@ -1053,13 +1071,20 @@ const NO_POSE = { left: null, right: null };
 function narratePhase(lesson, { thenPlay = true } = {}) {
   const client = ws;
   const key = lessonKey(lesson);
-  const lines = phaseLines(lesson, { score: page.score, positions: page.positions, tempo: page.tempo, target: scoreTempo() }).map((line) =>
-    line?.pose ? { say: line.say, before: () => ws === client && client.change({ pose: line.pose }) } : line,
-  );
+  const current = () => ws === client && lessonKey(client.state?.lesson) === key;
+  const lines = phaseLines(lesson, { score: page.score, positions: page.positions, events: page.events, tempo: page.tempo, target: scoreTempo() }).map((line) => {
+    if (line?.pose) return { say: line.say, before: () => current() && client.change({ pose: line.pose }) };
+    if (line?.time !== undefined) return { say: line.say, before: () => current() && playMoment(line.time) };
+    return line;
+  });
   sayAfresh(lines).then((ending) => {
-    if (!thenPlay || !phasePlays(lesson.phase) || ending === "dropped" || ws !== client || lessonKey(client.state?.lesson) !== key || client.state.playing) return;
+    if (!thenPlay || !phasePlays(lesson.phase) || ending === "dropped" || !current() || client.state.playing) return;
     if (!client.lead) client.claimLead().catch(() => {});
-    client.change({ playing: true });
+    // From the top of the passage, wherever naming the notes left the hands.
+    player.stop();
+    const passage = lessonPassage();
+    if (passage) cueStep(passage.first);
+    client.change({ playing: true, ...(passage ? { time: page.steps[passage.first].time } : {}) });
   });
 }
 
@@ -1089,7 +1114,7 @@ function showLesson(state, { by, local }) {
     lessonPanel.progress.textContent = describeProgress(lesson, { tempo: page.tempo, target });
     lessonPanel.next.textContent = describeNext(lesson, { tempo: page.tempo, target });
     lessonPanel.play.textContent = state.playing ? "⏸ Pause" : "▶ Play";
-    lessonPanel.play.title = state.playing ? "Pause the passage" : phasePlays(lesson.phase) === "loop" ? "Play the passage on a loop" : "Play the passage";
+    lessonPanel.play.title = state.playing ? "Pause the passage" : phasePlays(lesson.phase) === Infinity ? "Play the passage on a loop" : "Play the passage";
   }
   const key = lessonKey(lesson);
   if (key === shown.lesson) return;

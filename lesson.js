@@ -1,13 +1,18 @@
 // Learning a passage: a few measures, taken one hand at a time and then both.
-// Each hand goes through three phases, and "got it" moves on: the hand is
-// placed one finger at a time; the passage is played through once, slowly;
-// then it loops, a little faster at each "got it" until the score's own tempo.
+// Each hand goes through four phases, and "got it" moves on: the hand is
+// placed one finger at a time; the notes are named and played one by one, and
+// the passage shown a couple of times; the passage is played through once,
+// slowly, for the player to join in; then it loops, a little faster at each
+// "got it" until the score's own tempo.
 // The lesson is part of the workspace, so the page and any agent see the same
 // one; the page plays the passage, keeps the camera straight over the hands,
 // and says what to do.
 export const STAGES = ["right", "left", "both"]; // in this order
-export const PHASES = ["position", "once", "ramp"]; // placing the hand; once through, slowly; looping and climbing to the score's tempo
+export const PHASES = ["position", "show", "once", "ramp"]; // placing the hand; the notes named and the passage shown; once through, slowly; looping and climbing to the score's tempo
 export const FINGER_PAUSE = 1400; // ms the voice leaves after naming a finger, for the finger to get there
+export const NOTE_PAUSE = 800; // ms after naming a note, as it sounds
+export const SHOW_TIMES = 2; // how many times the passage is played to show it
+export const NOTES_NAMED = 16; // the most moments named one by one before "and so on"
 export const RAMP = 3; // beats a minute added at each "got it" while climbing
 export const SLOW_SHARE = 0.5; // the starting tempo, as a share of the score's
 export const LESSON_MEASURES = 4; // how many measures a lesson takes on by default
@@ -54,13 +59,15 @@ export function stageHands(stage) {
   };
 }
 
-// What pressing "got it" does: the hand placed → once through, slowly; heard
-// once → looping at that tempo; looping → a little faster, until the score's
+// What pressing "got it" does: the hand placed → the notes shown; shown →
+// once through, slowly; heard once → looping at that tempo; looping → a little
+// faster, until the score's
 // tempo; at the score's tempo → the next hand, placed afresh; after the last
 // hand → done. Answers the new lesson (null when done), the tempo to practise
 // at, and what just happened, for the voice.
 export function advanceLesson(lesson, tempo, target) {
-  if (lesson.phase === "position") return { lesson: { ...lesson, phase: "once" }, tempo: slowTempo(target), event: "once" };
+  if (lesson.phase === "position") return { lesson: { ...lesson, phase: "show" }, tempo: slowTempo(target), event: "show" };
+  if (lesson.phase === "show") return { lesson: { ...lesson, phase: "once" }, tempo, event: "once" };
   if (lesson.phase === "once") return { lesson: { ...lesson, phase: "ramp" }, tempo, event: "ramp" };
   if (tempo < target) {
     const faster = nextTempo(tempo, target);
@@ -71,9 +78,10 @@ export function advanceLesson(lesson, tempo, target) {
   return { lesson: { ...lesson, stage: next, phase: "position" }, tempo: slowTempo(target), event: "stage" };
 }
 
-// Whether a phase plays the passage: once through, or over and over.
+// How many times a phase plays the passage: a couple to show it, once for
+// the player to join in, Infinity when it loops, 0 when it does not play.
 export function phasePlays(phase) {
-  return phase === "once" ? "once" : phase === "ramp" ? "loop" : null;
+  return { show: SHOW_TIMES, once: 1, ramp: Infinity }[phase] ?? 0;
 }
 
 // Where the passage sits in the piece, in quarter notes: [start, end).
@@ -140,15 +148,46 @@ function placeHand(hand, positions, range) {
   return lines;
 }
 
+const list = (items) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
+
+// The notes of the passage in the order the hand plays them, each with its
+// finger. Each line carries the score time of its moment, so the hand on the
+// screen can play it as it is named. A moment the same as the last is "Again".
+function nameNotes(hand, events, range) {
+  const played = events.filter((event) => event.hand === hand && event.attack && event.time >= range.start - 1e-6 && event.time < range.end - 1e-6);
+  const lines = [];
+  let last = null;
+  for (const event of played.slice(0, NOTES_NAMED)) {
+    const struck = event.notes.filter((note) => !note.held).sort((a, b) => a.midi - b.midi);
+    if (!struck.length) continue;
+    const same = struck.map((note) => `${note.midi}:${note.finger}`).join(",");
+    const fingers = struck.map((note) => note.finger).filter(Boolean);
+    let say;
+    if (same === last) say = "Again.";
+    else if (struck.length === 1) say = `${spokenNote(struck[0].note)}${fingers.length ? `, ${FINGER_NAMES[fingers[0]].toLowerCase()}` : ""}.`;
+    else say = `${list(struck.map((note) => spokenNote(note.note)))} together${fingers.length === struck.length ? `, fingers ${list(fingers)}` : ""}.`;
+    last = same;
+    lines.push({ say, time: event.time }, NOTE_PAUSE);
+  }
+  if (played.length > NOTES_NAMED) lines.push("And so on.");
+  return lines;
+}
+
 // What the voice says as a phase begins: lines to read, with pauses in
-// milliseconds between some of them; a line may be `{ say, pose }`, the pose
-// being what to show the hands doing as it is said. `score` has `title` and
-// `measures`; `positions` are the fingered hand positions; `tempo` is the
+// milliseconds between some of them. A line may be `{ say, pose }`, the pose
+// being what to show the hands doing as it is said, or `{ say, time }`, the
+// moment of the score to play as it is said. `score` has `title` and
+// `measures`; `positions` and `events` are the fingered ones; `tempo` is the
 // practice tempo and `target` the score's.
-export function phaseLines(lesson, { score, positions, tempo, target }) {
+export function phaseLines(lesson, { score, positions, events, tempo, target }) {
   const range = lessonRange(lesson, score.measures);
   if (!range) return [];
-  if (lesson.phase === "once") return [`Now once through, slowly, at ${tempo}. Play along.`];
+  if (lesson.phase === "show") {
+    const times = SHOW_TIMES === 2 ? "twice" : `${SHOW_TIMES} times`;
+    if (lesson.stage === "both") return [`Watch both hands together. I'll play it ${times}.`];
+    return ["Here are the notes.", ...nameNotes(lesson.stage, events, range), `Now watch. I'll play it ${times}.`];
+  }
+  if (lesson.phase === "once") return [`Now your turn. Once through, slowly, at ${tempo}. Play along.`];
   if (lesson.phase === "ramp") return [`Good. Now it loops. Try ${tempo}; when it's clean, press Got it and we go up ${RAMP} beats a minute at a time, to ${target}.`];
   // Placing the hand.
   const where = range.from === range.to ? `measure ${range.from}` : `measures ${range.from} to ${range.to}`;
@@ -185,20 +224,26 @@ export function describeAdvance(event, { tempo, target }) {
   return "";
 }
 
-// What to say when the once-through has been heard.
-export const HEARD_ONCE = "Press Got it when you're ready, or Play to hear it again.";
+// What to say when the passage has played out, in a phase where it does.
+export function describePlayed(phase) {
+  if (phase === "show") return "Press Got it when you're ready to try it, or Play to watch again.";
+  if (phase === "once") return "Press Got it when you're ready, or Play to go again.";
+  return "";
+}
 
 // A line for the screen: where the lesson is.
 export function describeProgress(lesson, { tempo, target }) {
   const stage = lesson.stage === "both" ? "Both hands" : lesson.stage === "right" ? "Right hand" : "Left hand";
   if (lesson.phase === "position") return `${stage} · placing ${lesson.stage === "both" ? "the hands" : "the hand"}`;
-  if (lesson.phase === "once") return `${stage} · once through at ${tempo}`;
+  if (lesson.phase === "show") return `${stage} · the notes`;
+  if (lesson.phase === "once") return `${stage} · your turn, once through at ${tempo}`;
   return `${stage} · ${tempo >= target ? `at full tempo, ${target}` : `looping · ${tempo} of ${target}`}`;
 }
 
 // The label for the "got it" button: what pressing it will do.
 export function describeNext(lesson, { tempo, target }) {
   if (lesson.phase === "position") return lesson.stage === "both" ? "✓ Hands are set" : "✓ Hand is set";
+  if (lesson.phase === "show") return "✓ Got it · my turn";
   if (lesson.phase === "once") return "✓ Got it · loop it";
   if (tempo < target) return "✓ Got it · faster";
   return lesson.stage === "both" ? "✓ Got it · finish" : "✓ Got it · next hand";
