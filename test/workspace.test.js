@@ -7,7 +7,7 @@ import { applyHandMoves, countCorrections, matchingMoments, withCorrection } fro
 import { assignFingering } from "../fingering.js";
 import { createAppServer } from "../server.js";
 import { parseConnection, workspaceFromHash } from "../workspace-client.js";
-import { cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
+import { cleanPose, cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
 
 const event = (measure, beat, hand, midis) => ({ measure: String(measure), beat, hand, time: (measure - 1) * 4 + beat - 1, duration: 1, attack: true, notes: midis.map((midi) => ({ midi, note: `n${midi}`, duration: 1 })) });
 
@@ -304,4 +304,70 @@ test("the manual is served, and PUT replaces the whole state", async () => {
     assert.equal(put.state.time, 0, "what PUT leaves out goes back to its default");
     assert.equal(put.state.numbers, true);
   });
+});
+
+test("a lesson is part of the state, and a null takes it away", () => {
+  let state = mergeState(defaultState(), { lesson: { from: 2, to: 5, stage: "left", phase: "ramp" } });
+  assert.deepEqual(state.lesson, { from: 2, to: 5, stage: "left", phase: "ramp" });
+  state = mergeState(state, { lesson: { stage: "both", phase: "once" } });
+  assert.deepEqual(state.lesson, { from: 2, to: 5, stage: "both", phase: "once" }, "a partial change keeps the rest");
+  state = mergeState(state, { lesson: null });
+  assert.equal(state.lesson, null);
+  assert.equal(cleanState({ lesson: { from: 4, to: 2 } }).lesson, null, "a range that ends before it starts is no lesson");
+  assert.deepEqual(cleanState({ lesson: { from: "1", to: 1.5 } }).lesson, null);
+  assert.deepEqual(cleanState({ lesson: { from: 1, to: 1, stage: "feet" } }).lesson, { from: 1, to: 1, stage: "right", phase: "position" });
+});
+
+test("the voice reads a line once and keeps it, behind the workspace token", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "musichands-"));
+  const spoken = [];
+  const server = createAppServer(undefined, { dataDir, speak: async (text) => { spoken.push(text); return Buffer.from(`mp3:${text}`); }, voiceName: "test" });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://localhost:${server.address().port}`;
+  try {
+    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const auth = { authorization: `Bearer ${made.token}`, "content-type": "application/json" };
+    const say = (text, headers = auth) => fetch(`${base}/api/workspaces/${made.id}/speech`, { method: "POST", headers, body: JSON.stringify({ text }) });
+    assert.equal((await say("Hello", { "content-type": "application/json" })).status, 401);
+    const first = await say("Right hand first.");
+    assert.equal(first.status, 200);
+    assert.equal(first.headers.get("content-type"), "audio/mpeg");
+    assert.equal(await first.text(), "mp3:Right hand first.");
+    const again = await say("  Right   hand first. ");
+    assert.equal(await again.text(), "mp3:Right hand first.");
+    assert.deepEqual(spoken, ["Right hand first."], "the same line, however spaced, is read once");
+    assert.equal((await say("")).status, 400);
+    assert.ok((await readdir(path.join(dataDir, "speech"))).length === 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("without a voice the speech route says so", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "musichands-"));
+  const server = createAppServer(undefined, { dataDir, speak: null });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://localhost:${server.address().port}`;
+  try {
+    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const answer = await fetch(`${base}/api/workspaces/${made.id}/speech`, { method: "POST", headers: { authorization: `Bearer ${made.token}` }, body: JSON.stringify({ text: "Hello" }) });
+    assert.equal(answer.status, 503);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("a hand can be put somewhere directly, finger by finger, and given back to the score", () => {
+  assert.deepEqual(cleanPose({ fingers: [{ finger: 3, note: "E4" }, { finger: 1, note: "C4" }, { finger: 1, note: "D4" }, { finger: 9, note: "F4" }, { finger: 2, note: "H4" }], press: ["C4", "C4", "x"] }), { fingers: [{ finger: 1, note: "C4" }, { finger: 3, note: "E4" }], press: ["C4"] });
+  assert.equal(cleanPose({ fingers: [] }), null, "a hand needs at least one finger on a key");
+  assert.equal(cleanPose("thumb on C"), null);
+  let state = mergeState(defaultState(), { pose: { right: { fingers: [{ finger: 1, note: "C4" }], press: ["C4"] } } });
+  assert.deepEqual(state.pose, { left: null, right: { fingers: [{ finger: 1, note: "C4" }], press: ["C4"] } });
+  state = mergeState(state, { pose: { right: { fingers: [{ finger: 1, note: "C4" }, { finger: 2, note: "D4" }], press: ["D4"] } } });
+  assert.deepEqual(state.pose.right.fingers.map((entry) => entry.note), ["C4", "D4"], "the next finger joins the hand");
+  assert.deepEqual(state.pose.right.press, ["D4"]);
+  state = mergeState(state, { pose: { right: null } });
+  assert.equal(state.pose.right, null);
 });

@@ -9,12 +9,14 @@ import { applyHandMoves, countCorrections } from "./corrections.js";
 import { applyChoices, HANDS } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
+import { advanceLesson, defaultLesson, describeAdvance, describeNext, describeProgress, HEARD_ONCE, lessonRange, lessonSteps, OVERHEAD, phaseLines, phasePlays, slowTempo, stageHands } from "./lesson.js";
 import { PianoAudio } from "./piano-audio.js";
 import { LOOK_KINDS, LOOKS } from "./looks.js";
 import { readMxl } from "./mxl.js";
 import { parseScore } from "./score-model.js";
 import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js";
 import { ScoreTransport } from "./score-transport.js";
+import { Narrator, serverSpeech } from "./speech.js";
 import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
 import { LIMITS } from "./workspace-model.js";
 
@@ -22,7 +24,7 @@ const songList = document.querySelector("#song-list");
 const scoreFile = document.querySelector("#score-file");
 const scoreTitle = document.querySelector("#score-title");
 const removeScore = document.querySelector("#remove-score");
-const dialogs = { song: document.querySelector("#song-dialog"), settings: document.querySelector("#settings-dialog") };
+const dialogs = { song: document.querySelector("#song-dialog"), settings: document.querySelector("#settings-dialog"), lesson: document.querySelector("#lesson-dialog") };
 const scoreContainer = document.querySelector("#score-container");
 const status = document.querySelector("#sheet-status");
 const statusText = document.querySelector("#sheet-status-text");
@@ -38,6 +40,20 @@ const tempoSlider = document.querySelector("#tempo");
 const tempoOutput = document.querySelector("#tempo-output");
 const tempoTicks = document.querySelector("#tempo-ticks");
 const handChoice = document.querySelector(".hand-choice");
+const learnButton = document.querySelector("#learn");
+const lessonPanel = {
+  root: document.querySelector("#lesson"),
+  kicker: document.querySelector("#lesson-kicker"),
+  progress: document.querySelector("#lesson-progress"),
+  caption: document.querySelector("#lesson-caption"),
+  next: document.querySelector("#lesson-next"),
+  stop: document.querySelector("#lesson-stop"),
+  play: document.querySelector("#lesson-play"),
+  restart: document.querySelector("#lesson-restart"),
+  again: document.querySelector("#lesson-again"),
+};
+const lessonFrom = document.querySelector("#lesson-from");
+const lessonTo = document.querySelector("#lesson-to");
 const bar = {
   connect: document.querySelector("#workspace-connect"),
   home: document.querySelector("#workspace-home"),
@@ -65,6 +81,7 @@ const page = {
   fullScreen: false, // the piano fills the window, under the line of music being played
   bands: null, // where each line of music sits in the notation as drawn; worked out when asked for
   measureShown: null, // the measure the hands were last shown in
+  poseArrived: false, // a told pose has just changed, so its pressed keys are struck
   notes: [],
   doubts: [],
 };
@@ -257,6 +274,17 @@ function showHands({ jump = false, strike = true, landIn = null } = {}) {
       // Replaying a moment strikes everything in it; the score strikes only what is not tied over.
       strikeMidis: page.replay ? null : struck.map((note) => note.midi),
     };
+  }
+  // A hand the workspace puts somewhere itself goes there instead, while the
+  // piece is not playing; its pressed keys are struck as the pose arrives.
+  if (!transport.playing) {
+    for (const hand of HANDS) {
+      const pose = ws.state.pose[hand];
+      if (!pose || !ws.state.hands[hand].show) continue;
+      const pressed = pose.press.map(noteToMidi);
+      pose.fingers.forEach((entry) => underFinger.add(noteToMidi(entry.note)));
+      hands[hand] = { fingers: pose.fingers, activeMidis: pressed, strike: strike && page.poseArrived && pressed.length > 0, strikeMidis: pressed };
+    }
   }
   const landing = handsView.setHands(hands, { immediate: jump, landIn });
   // Keys with no hand on them: clicked ones, and replayed ones. A hidden hand
@@ -644,7 +672,7 @@ function showScores() {
 // Points the workspace at another of its pieces. Corrections are by moment,
 // so they stay behind with the piece they were made for.
 function chooseScore({ id, title }) {
-  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null } });
+  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null }, lesson: null, pose: { left: null, right: null } });
 }
 
 scoreTitle.addEventListener("click", () => dialogs.song.showModal());
@@ -791,6 +819,7 @@ const transport = new ScoreTransport({
   done: () => {
     showPlaying(false);
     ws.change({ playing: false });
+    if (ws.state?.lesson?.phase === "once") voice.say(HEARD_ONCE);
   },
 });
 
@@ -825,10 +854,16 @@ async function startTransport() {
     if (preparingTransport === preparation) preparingTransport = null;
   }
   if (serial !== preparationSerial || !prepared || ws !== client || page.steps !== steps || !client.lead || !ws?.state?.playing || transport.playing) return;
-  // From the end, play again from the top.
-  const from = page.stepIndex >= page.steps.length - 1 ? 0 : page.stepIndex;
   lastSharedTime = -Infinity;
-  transport.start(from);
+  const passage = lessonPassage();
+  if (passage) {
+    // A lesson plays its passage, once or over and over, from wherever in it the music is.
+    const inside = page.stepIndex >= passage.first && page.stepIndex <= passage.last;
+    transport.start(inside ? page.stepIndex : passage.first, { last: passage.last, loop: passage.loop });
+  } else {
+    // From the end, play again from the top.
+    transport.start(page.stepIndex >= page.steps.length - 1 ? 0 : page.stepIndex);
+  }
   showPlaying(true);
 }
 
@@ -925,6 +960,166 @@ handsStage.addEventListener("noteoff", (event) => {
   showHands({ strike: false });
 });
 
+// ---------------------------------------------------------------------------
+// Learning: a passage of the piece, one hand at a time and then both, slowly
+// and then faster (lesson.js). The lesson is in the workspace; the voice and
+// the looping playback are this browser's doing.
+
+// The panel shows what has been said in the phase so far, a line at a time.
+const voice = new Narrator({
+  fetchSpeech: serverSpeech(() => ws),
+  onLine: (line) => {
+    lessonPanel.caption.textContent = lessonPanel.caption.textContent ? `${lessonPanel.caption.textContent} ${line}` : line;
+  },
+});
+function sayAfresh(lines) {
+  voice.stop();
+  lessonPanel.caption.textContent = "";
+  return voice.sayAll(Array.isArray(lines) ? lines : [lines]);
+}
+
+const scoreTempo = () => page.score?.tempo ?? DEFAULT_TEMPO;
+const lessonKey = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.stage}:${lesson.phase}` : null);
+
+// The lesson's passage as steps to play, looping when the phase loops, or
+// null when there is none.
+function lessonPassage() {
+  const lesson = ws?.state?.lesson;
+  if (!lesson || !page.score) return null;
+  const range = lessonRange(lesson, page.score.measures);
+  const steps = range && lessonSteps(range, page.steps);
+  return steps ? { ...steps, loop: phasePlays(lesson.phase) === "loop" ? { from: range.start, to: range.end } : null } : null;
+}
+
+// Offers the measure on screen and the few after it, to change before starting.
+function offerLesson() {
+  if (!page.score || !ws?.state) return;
+  const { measures } = page.score;
+  const shown = page.steps[page.stepIndex]?.measure;
+  const offered = defaultLesson(Math.max(0, measures.findIndex((measure) => measure.number === shown)), measures.length);
+  for (const select of [lessonFrom, lessonTo]) {
+    select.replaceChildren(
+      ...measures.map((measure, index) => {
+        const option = document.createElement("option");
+        option.value = index;
+        option.textContent = measure.number;
+        return option;
+      }),
+    );
+  }
+  lessonFrom.value = offered.from;
+  lessonTo.value = offered.to;
+  dialogs.lesson.showModal();
+}
+
+// Puts the workspace at the start of the passage, one hand, slow, seen from
+// above. The stage change is narrated and then played by showLesson().
+function startLesson(from, to) {
+  const lesson = { from: Math.min(from, to), to: Math.max(from, to), stage: "right", phase: "position" };
+  const range = lessonRange(lesson, page.score.measures);
+  if (!range) return;
+  if (!ws.lead) ws.claimLead().catch(() => {});
+  const camera = { ...ws.state.camera, view: { ...OVERHEAD }, autoCut: false };
+  ws.change({ lesson, time: range.start, tempo: slowTempo(scoreTempo()), hands: stageHands(lesson.stage), camera, playing: false, pose: NO_POSE });
+  handsView.setCamera(camera); // a local change is not laid back on the stage by applyLatest()
+}
+
+function stopLesson() {
+  if (!ws?.state?.lesson) return;
+  ws.change({ lesson: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE });
+}
+
+// "Got it": the next phase, or a little faster, or the next hand, or done.
+function gotIt() {
+  const lesson = ws?.state?.lesson;
+  if (!lesson || !page.score) return;
+  const target = scoreTempo();
+  const next = advanceLesson(lesson, page.tempo, target);
+  if (["once", "ramp", "stage"].includes(next.event)) {
+    // A new phase: back to the top of the passage, quiet, the hands back to the score's, for the voice to introduce it (showLesson).
+    const range = lessonRange(next.lesson, page.score.measures);
+    ws.change({ lesson: next.lesson, tempo: next.tempo, hands: stageHands(next.lesson.stage), time: range.start, playing: false, pose: NO_POSE });
+    return;
+  }
+  if (next.event === "done") ws.change({ lesson: null, tempo: target, hands: stageHands("both"), playing: false, pose: NO_POSE });
+  else ws.change({ lesson: next.lesson, tempo: next.tempo }); // the music, if playing, follows the new tempo where it is
+  sayAfresh(describeAdvance(next.event, { tempo: next.tempo, target }));
+}
+
+const NO_POSE = { left: null, right: null };
+
+// Talks the phase through, then plays the passage if the phase plays it.
+// While the hand is placed, each finger named goes to its key on the stage.
+function narratePhase(lesson, { thenPlay = true } = {}) {
+  const client = ws;
+  const key = lessonKey(lesson);
+  const lines = phaseLines(lesson, { score: page.score, positions: page.positions, tempo: page.tempo, target: scoreTempo() }).map((line) =>
+    line?.pose ? { say: line.say, before: () => ws === client && client.change({ pose: line.pose }) } : line,
+  );
+  sayAfresh(lines).then((ending) => {
+    if (!thenPlay || !phasePlays(lesson.phase) || ending === "dropped" || ws !== client || lessonKey(client.state?.lesson) !== key || client.state.playing) return;
+    if (!client.lead) client.claimLead().catch(() => {});
+    client.change({ playing: true });
+  });
+}
+
+// The passage from the top; played, in a phase that plays it.
+function restartLesson() {
+  const lesson = ws?.state?.lesson;
+  if (!lesson || !page.score) return;
+  const range = lessonRange(lesson, page.score.measures);
+  stopTransport();
+  const playing = Boolean(phasePlays(lesson.phase));
+  if (playing && !ws.lead) ws.claimLead().catch(() => {});
+  ws.change({ time: range.start, playing });
+}
+
+// Lays the workspace's lesson on the screen. When a stage begins, the browser
+// that began it (or the lead, when an agent did) talks it through, then plays.
+function showLesson(state, { by, local }) {
+  const client = ws;
+  const { lesson } = state;
+  const target = scoreTempo();
+  lessonPanel.root.hidden = !lesson;
+  learnButton.setAttribute("aria-pressed", String(Boolean(lesson)));
+  learnButton.textContent = lesson ? "Learning…" : "Learn";
+  if (lesson) {
+    const range = lessonRange(lesson, page.score.measures);
+    lessonPanel.kicker.textContent = range.from === range.to ? `Learning measure ${range.from}` : `Learning measures ${range.from}–${range.to}`;
+    lessonPanel.progress.textContent = describeProgress(lesson, { tempo: page.tempo, target });
+    lessonPanel.next.textContent = describeNext(lesson, { tempo: page.tempo, target });
+    lessonPanel.play.textContent = state.playing ? "⏸ Pause" : "▶ Play";
+    lessonPanel.play.title = state.playing ? "Pause the passage" : phasePlays(lesson.phase) === "loop" ? "Play the passage on a loop" : "Play the passage";
+  }
+  const key = lessonKey(lesson);
+  if (key === shown.lesson) return;
+  const wasOn = Boolean(shown.lesson);
+  shown.lesson = key;
+  if (!lesson) {
+    if (wasOn && !(local || by === client.client)) voice.stop(); // ended elsewhere; the "well done" of a local finish is left to play out
+    lessonPanel.caption.textContent = "";
+    return;
+  }
+  if (!(local || (client.lead && by !== client.client))) return;
+  narratePhase(lesson);
+}
+
+learnButton.addEventListener("click", () => (ws?.state?.lesson ? stopLesson() : offerLesson()));
+document.querySelector("#lesson-start").addEventListener("click", () => {
+  dialogs.lesson.close();
+  startLesson(Number(lessonFrom.value), Number(lessonTo.value));
+});
+lessonPanel.next.addEventListener("click", gotIt);
+lessonPanel.stop.addEventListener("click", stopLesson);
+lessonPanel.play.addEventListener("click", togglePlaying);
+lessonPanel.restart.addEventListener("click", restartLesson);
+lessonPanel.again.addEventListener("click", () => {
+  const lesson = ws?.state?.lesson;
+  if (!lesson) return;
+  if (lesson.phase === "position") ws.change({ pose: NO_POSE });
+  narratePhase(lesson, { thenPlay: !ws.state.playing });
+});
+
 // What an agent can ask the page to do.
 function runCommand(type) {
   if (type === "play") ws.change({ playing: true });
@@ -954,6 +1149,8 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
   else if (event.key === "n" || event.key === "N") ws.change({ numbers: !ws.state.numbers });
   else if (event.key === "f" || event.key === "F") setFullScreen(!page.fullScreen);
+  else if (event.key === "l" || event.key === "L") offerLesson();
+  else if (event.key === "g" || event.key === "G") gotIt();
   else if (event.key === "Escape" && page.fullScreen) setFullScreen(false);
   else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
   else return;
@@ -1052,7 +1249,22 @@ async function applyLatest() {
       moveCursorTo(page.steps[index]?.time ?? 0);
     }
   } else if (handsChanged) showHands({ strike: false });
+  // A hand put somewhere by the workspace: it goes there and presses its keys.
+  const poseKey = JSON.stringify(state.pose);
+  if (poseKey !== shown.pose) {
+    shown.pose = poseKey;
+    if (!transport.playing && !first) {
+      page.poseArrived = true;
+      const landing = showHands();
+      page.poseArrived = false;
+      for (const hand of HANDS) {
+        if (!state.hands[hand].sound) continue;
+        for (const note of state.pose[hand]?.press ?? []) audio.noteOn(noteToMidi(note), { delay: landing, duration: 1500 });
+      }
+    }
+  }
   if (refingered) showSummary();
+  showLesson(state, { by, local });
 
   // The camera is the stage's own while this browser moves it.
   if (!local) handsView.setCamera(state.camera, { immediate: first });
@@ -1082,6 +1294,7 @@ const hashFor = (entry) => `#ws=${entry.id}&token=${entry.token}`;
 async function openWorkspace({ id, token }) {
   stopTransport();
   player.stop();
+  voice.stop();
   ws?.close();
   const client = new WorkspaceClient({ id, token });
   ws = client;

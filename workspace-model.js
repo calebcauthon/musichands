@@ -3,6 +3,7 @@
 // keeps them in step. Nothing on the screen lives anywhere else.
 import { cleanView } from "./camera-orbit.js";
 import { readShots } from "./camera-shots.js";
+import { cleanLesson } from "./lesson.js";
 import { cleanLook, defaultLook } from "./looks.js";
 
 export const COMMANDS = ["play", "stop", "replay-together", "replay-succession", "replay-roundtrip"];
@@ -21,6 +22,8 @@ export function defaultState() {
     sound: true,
     look: defaultLook(), // the piano, the player and the place, by name (see looks.js)
     corrections: { fingers: {}, hands: {} },
+    lesson: null, // { from, to, stage, phase }: the passage being learnt (see lesson.js), or none
+    pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note] }
     command: null, // { seq, type }: the last thing an agent asked the page to do
   };
 }
@@ -64,6 +67,22 @@ export function cleanHandMoves(value) {
   return clean;
 }
 
+// A hand position given directly: which finger on which note, and which of
+// those keys are pressed. Null for a hand left to the score.
+export function cleanPose(value) {
+  if (!isObject(value) || !Array.isArray(value.fingers)) return null;
+  const fingers = [];
+  for (const entry of value.fingers) {
+    const finger = Number(entry?.finger);
+    if (![1, 2, 3, 4, 5].includes(finger) || !NOTE.test(String(entry?.note)) || fingers.some((known) => known.finger === finger)) continue;
+    fingers.push({ finger, note: String(entry.note) });
+  }
+  if (!fingers.length) return null;
+  fingers.sort((a, b) => a.finger - b.finger);
+  const press = Array.isArray(value.press) ? [...new Set(value.press.map(String).filter((note) => NOTE.test(note)))] : [];
+  return { fingers, press };
+}
+
 // Whatever was stored or sent, made into a state the page can show.
 export function cleanState(value) {
   const base = defaultState();
@@ -98,6 +117,8 @@ export function cleanState(value) {
   if (isObject(value.corrections)) {
     state.corrections = { fingers: cleanFingers(value.corrections.fingers), hands: cleanHandMoves(value.corrections.hands) };
   }
+  state.lesson = cleanLesson(value.lesson);
+  if (isObject(value.pose)) for (const hand of ["left", "right"]) state.pose[hand] = cleanPose(value.pose[hand]);
   if (isObject(value.command) && COMMANDS.includes(value.command.type)) {
     state.command = { seq: Number(value.command.seq) || 0, type: value.command.type, by: String(value.command.by ?? "") };
   }

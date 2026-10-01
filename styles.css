@@ -1281,6 +1281,106 @@ kbd {
 }
 
 
+/* The lesson under way, at the bottom left of the stage: the passage, the
+   hand and the tempo, what the voice is saying, and the way on. */
+.lesson {
+  position: absolute;
+  bottom: 52px;
+  left: var(--space-sm);
+  z-index: 3;
+  width: min(24rem, 46%);
+  padding: 10px 12px 12px;
+  border: 1px solid oklch(95% 0.03 84 / 0.35);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.82);
+  backdrop-filter: blur(6px);
+}
+
+.lesson[hidden] {
+  display: none;
+}
+
+.lesson p {
+  margin: 0;
+}
+
+.lesson__kicker {
+  color: #e9a63a;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.lesson__progress {
+  margin-top: 2px;
+  font-family: var(--display);
+  font-size: 1.1rem;
+  font-style: italic;
+}
+
+.lesson__caption {
+  margin-top: 6px;
+  max-height: 7.5em;
+  overflow-y: auto;
+  color: oklch(95% 0.03 84 / 0.82);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.lesson__caption:empty {
+  display: none;
+}
+
+.lesson__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: 10px;
+}
+
+.lesson__actions--passage {
+  margin-top: 8px;
+}
+
+.lesson__actions--passage .button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 0.72rem;
+}
+
+.lesson__actions .button {
+  min-height: 32px;
+  padding: 0 12px;
+  border-color: oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.72);
+  font-size: 0.78rem;
+}
+
+.lesson__actions .button--primary {
+  border-color: #e9a63a;
+  color: oklch(18% 0.02 50);
+  background: #e9a63a;
+}
+
+.transport .learn-button[aria-pressed="true"] {
+  border-color: #e9a63a;
+  color: oklch(18% 0.02 50);
+  background: #e9a63a;
+}
+
+/* Picking the passage to learn. */
+.lesson-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.lesson-range .field--inline {
+  gap: var(--space-xs);
+}
+
 /* Choosing what to see and hear of each hand. */
 /* Full screen: the theater is given the whole window. */
 body.full-screen {

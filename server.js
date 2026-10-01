@@ -18,6 +18,7 @@ import { cleanState, COMMANDS, mergeState, projectScreen } from "./workspace-mod
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY = 8 * 1024 * 1024;
+const MAX_SPEECH = 1500; // characters the voice will read in one go
 const WORKSPACE_ID = /^ws-[a-z0-9]{10}$/;
 const SCORE_ID = /^[0-9a-f]{64}$/;
 const TYPES = {
@@ -218,7 +219,7 @@ class Workspaces {
     const open = record.state.score?.id === scoreId;
     record.scores = record.scores.filter((entry) => entry.id !== scoreId);
     await unlink(this.scoreFile(record.id, scoreId)).catch(() => {});
-    return this.patch(record, open ? { state: { time: 0, playing: false, corrections: { fingers: null, hands: null } } } : {}, by);
+    return this.patch(record, open ? { state: { time: 0, playing: false, corrections: { fingers: null, hands: null }, lesson: null, pose: { left: null, right: null } } } : {}, by);
   }
 
   async write(record) {
@@ -292,8 +293,26 @@ function send(response, event, data) {
 
 const bearer = (request, url) => request.headers.authorization?.replace(/^Bearer\s+/i, "") ?? url.searchParams.get("token") ?? "";
 
-export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "" } = {}) {
+// The voice that reads lessons aloud: ElevenLabs, with the key kept here so
+// the page never sees it. Answers the MP3 for a text, or null if there is no key.
+export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM", model = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5" } = {}) {
+  if (!key) return null;
+  return async (text) => {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_64`, {
+      method: "POST",
+      headers: { "xi-api-key": key, "content-type": "application/json", accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: model }),
+    });
+    if (!response.ok) throw new Error(`the voice answered ${response.status}`);
+    return Buffer.from(await response.arrayBuffer());
+  };
+}
+
+export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = `${process.env.ELEVENLABS_VOICE_ID ?? ""}/${process.env.ELEVENLABS_MODEL_ID ?? ""}` } = {}) {
   const workspaces = new Workspaces(dataDir, root);
+  // Each line the voice has read is kept under its hash, so a repeat costs
+  // nothing. Another voice reads everything afresh.
+  const speechFile = (text) => path.join(dataDir, "speech", `${createHash("sha256").update(`${voiceName}\n${text}`, "utf8").digest("hex")}.mp3`);
 
   // The MusicXML of the score a workspace has open.
   const scoreText = async (record) => {
@@ -333,7 +352,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(201, { ...connection(record), version: record.version, state: record.state, scores: record.scores });
     }
 
-    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
+    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
     if (!match) return json(404, { error: "Not found" });
     const record = await workspaces.get(match[1]);
     if (!record) return json(404, { error: "No such workspace" });
@@ -415,6 +434,29 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       if (!by) return json(400, { error: "Say which browser with x-client or ?client=" });
       if (!workspaces.claimLead(record, by)) return json(409, { error: `No browser named ${by} is watching this workspace` });
       return json(200, { lead: by });
+    }
+    if (part === "/speech" && request.method === "POST") {
+      if (!speak) return json(503, { error: "This site has no voice: set ELEVENLABS_API_KEY on the server" });
+      let text;
+      try {
+        ({ text } = JSON.parse((await readBody(request)).toString("utf8")));
+      } catch {
+        return json(400, { error: "The body must be JSON" });
+      }
+      text = String(text ?? "").trim().replace(/\s+/g, " ").slice(0, MAX_SPEECH);
+      if (!text) return json(400, { error: "Say what to read: { text }" });
+      const file = speechFile(text);
+      let audio = await readFile(file).catch(() => null);
+      if (!audio) {
+        try {
+          audio = await speak(text);
+        } catch (error) {
+          return json(502, { error: `The voice could not read that: ${error.message}` });
+        }
+        await writeAtomic(file, audio);
+      }
+      response.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "private, max-age=86400" });
+      return response.end(audio);
     }
     if (part === "/commands" && request.method === "POST") {
       let body;

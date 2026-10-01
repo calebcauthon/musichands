@@ -92,6 +92,8 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `corrections.fingers` | `{ "<moment>": { "<hand>": { "<note>": <finger 1–5> } } }`. Overrides the score's and the app's fingering at that moment. See "Corrections". |
 | `corrections.hands` | `{ "<moment>": { "<note>": "left" \| "right" } }`. Gives a note to the other hand at that moment. |
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
+| `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
+| `lesson` | The passage being learnt, or `null`: `{ "from": <measure index>, "to": <measure index>, "stage": "right" \| "left" \| "both", "phase": "position" \| "once" \| "ramp" }`. Measure indexes count from 0. See "Lessons". |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -164,6 +166,52 @@ for the piece they were made on. When the page switches a workspace to another
 piece it clears them; if you change `score` yourself, send
 `"corrections": { "fingers": null, "hands": null }` too unless you mean to keep
 them. Copy a workspace to try a different set.
+
+## Posing a hand
+
+`pose.right` (or `.left`) takes a hand off the score and puts it where you
+say: `fingers` is which finger sits on which note, `press` which of those
+keys are held down. The page draws the hand there, strikes and sounds the
+pressed keys as the pose arrives, and leaves the rest of the screen alone;
+`null` gives the hand back to the score. A pose is only shown while the piece
+is not playing. The lesson's placement phase writes poses finger by finger as
+the voice names them; you can do the same:
+
+```sh
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"pose": {"right": {"fingers": [{"finger": 1, "note": "C4"}], "press": ["C4"]}}}' $BASE/api/workspaces/$WS
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"pose": {"right": {"fingers": [{"finger": 1, "note": "C4"}, {"finger": 3, "note": "E4"}], "press": ["E4"]}}}' $BASE/api/workspaces/$WS
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"pose": {"right": null}}' $BASE/api/workspaces/$WS
+```
+
+## Lessons
+
+A lesson takes a few measures through three stages, `right` hand, then
+`left`, then `both`, and each stage through three phases: `position` (the
+voice places the hand a finger at a time; nothing plays), `once` (the passage
+plays through once, slowly, about half the score's tempo) and `ramp` (the
+passage loops, and each "got it" adds three beats a minute until the score's
+own tempo). The practice tempo is the workspace's ordinary `tempo`; the hands
+shown and heard are the ordinary `hands`; the placing phase writes `pose` as
+each finger is named and clears it after; Play plays the passage, once or on a
+loop as the phase has it. The page keeps the camera straight over the hands,
+says what to do through a voice, and the person presses "Got it" to move on.
+To start one, set it up the way the page does:
+
+```json
+{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "position" }, "time": 8, "tempo": 60, "hands": { "left": { "show": false, "sound": false }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+```
+
+The lead browser then talks the phase through and, in a phase that plays,
+starts playing. Change `phase` or `stage` (with `hands`, `tempo` and `time` to
+match) to move on; send `"lesson": null` to stop. Opening another score clears
+the lesson.
+
+`POST /api/workspaces/<id>/speech` with `{ "text": "…" }` answers that text
+read aloud as MP3, from the voice the site is set up with (up to 1500
+characters; `503` when the site has no voice). The page uses it for lessons.
 
 ## Changing the workspace
 

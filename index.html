@@ -51,6 +51,7 @@
               <input id="numbers-toggle" type="checkbox" checked />
               <span>Finger numbers</span>
             </label>
+            <button class="button learn-button" type="button" id="learn" aria-pressed="false" title="Learn a few measures: one hand, then the other, then both, slowly and then faster (L)">Learn</button>
             <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
             <button class="button gear" type="button" id="settings-open" title="Detail, agents and the look of the notation" aria-label="Settings">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -61,6 +62,21 @@
           </div>
           <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
           <button class="song-name" type="button" id="score-title" title="Change the song, or bring in another">Loading the score…</button>
+          <!-- The lesson under way: which passage, which hand, how fast, and what the voice is saying. -->
+          <section class="lesson" id="lesson" hidden aria-label="The lesson">
+            <p class="lesson__kicker" id="lesson-kicker">Learning</p>
+            <p class="lesson__progress" id="lesson-progress"></p>
+            <p class="lesson__caption" id="lesson-caption"></p>
+            <div class="lesson__actions lesson__actions--passage">
+              <button class="button" type="button" id="lesson-play" title="Play the passage">▶ Play</button>
+              <button class="button" type="button" id="lesson-restart" title="The passage from the top">↺ Restart</button>
+              <button class="button" type="button" id="lesson-again" title="Hear the instructions again">🔈 Again</button>
+            </div>
+            <div class="lesson__actions">
+              <button class="button button--primary" type="button" id="lesson-next" title="You have this step: on to the next (G)">✓ Got it</button>
+              <button class="button" type="button" id="lesson-stop" title="Stop the lesson and keep the piece as it was">Stop</button>
+            </div>
+          </section>
           <div class="hand-choice" role="group" aria-label="Which hands to see and hear">
             <button class="button" type="button" data-hands="left" aria-pressed="false" title="See and hear the left hand on its own">Left hand only</button>
             <button class="button" type="button" data-hands="both" aria-pressed="true" title="See and hear both hands">Both hands</button>
@@ -90,6 +106,29 @@
             <span class="status-dot" aria-hidden="true"></span>
             <span id="sheet-status-text">Reading the score</span>
           </p>
+        </form>
+      </dialog>
+
+      <dialog class="sheet-dialog" id="lesson-dialog" aria-labelledby="lesson-dialog-title">
+        <form method="dialog" class="sheet-dialog__form">
+          <div class="sheet-dialog__head">
+            <h2 id="lesson-dialog-title">Learn a passage</h2>
+            <button class="sheet-dialog__close" type="submit" aria-label="Close">×</button>
+          </div>
+          <p class="sheet-dialog__hint">A few measures at a time: the right hand, then the left, then both together. For each, the voice places your hand a finger at a time, plays the passage through once slowly, then loops it and goes up three beats a minute at each “Got it” until the score's own tempo. The hands are seen from straight above.</p>
+          <div class="lesson-range">
+            <label class="field field--inline">
+              <span>From measure</span>
+              <select id="lesson-from" aria-label="First measure"></select>
+            </label>
+            <label class="field field--inline">
+              <span>To measure</span>
+              <select id="lesson-to" aria-label="Last measure"></select>
+            </label>
+          </div>
+          <div class="sheet-dialog__actions">
+            <button class="button button--primary" type="button" id="lesson-start">Start learning</button>
+          </div>
         </form>
       </dialog>
 
@@ -124,7 +163,7 @@
           <div id="staff-legend" class="staff-legend" aria-label="Line colours by note name"></div>
           <p class="sheet-dialog__hint">Faint lines mark the first two ledger lines under each staff: C and A below the treble, E and C below the bass.</p>
           <h3 class="sheet-dialog__section">Keys</h3>
-          <p class="sheet-dialog__hint">← and → move through the piece, Home and End go to its ends, P plays it, Space hears the moment again (Shift for one finger at a time), N shows or hides the finger numbers, F is full screen. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a measure to go there.</p>
+          <p class="sheet-dialog__hint">← and → move through the piece, Home and End go to its ends, P plays it, Space hears the moment again (Shift for one finger at a time), N shows or hides the finger numbers, F is full screen, L starts a lesson and G is “Got it”. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a measure to go there.</p>
         </form>
       </dialog>
     </main>

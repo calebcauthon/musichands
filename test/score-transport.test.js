@@ -131,3 +131,40 @@ test("a change of tempo takes effect from where the music is", () => {
   advance(10000);
   assert.deepEqual(state.log.map((entry) => entry.lands), [200, 700, 1700, 2700]);
 });
+
+test("a passage plays to its last step and starts again on the beat", () => {
+  // Steps at 0, 1, 2, 3, 4, 5: the passage is the measure from 1 to 3 (quarter notes), a rest before its first note.
+  const { transport, state, advance } = bench({ times: [0, 1, 2, 3, 4, 5], tempo: 120, reach: 300, buffered: true });
+  transport.start(1, { last: 2, loop: { from: 0.5, to: 2.5 } });
+  advance(2900);
+  // The first go: step 1 lands at 300, step 2 at 800. The passage is two quarter
+  // notes long (1000 ms), so it starts again at 300 + 1000 - 250 (the half beat
+  // of rest before step 1): step 1 lands again at 1300, step 2 at 1800...
+  assert.deepEqual(state.log.map((entry) => [entry.index, entry.lands]), [[1, 300], [2, 800], [1, 1300], [2, 1800], [1, 2300], [2, 2800]]);
+  assert.deepEqual(state.audio.map((entry) => [entry.index, entry.lands]), [[1, 300], [2, 800], [1, 1300], [2, 1800], [1, 2300], [2, 2800]]);
+  assert.equal(state.finished, null, "a looping passage is never finished");
+  assert.equal(transport.playing, true);
+  transport.stop();
+  advance(6000);
+  assert.equal(state.log.length, 6, "stopping ends the loop");
+});
+
+test("a passage keeps looping through a tempo change", () => {
+  const run = bench({ times: [0, 1, 2, 3], tempo: 120, reach: 100, buffered: true });
+  run.transport.start(0, { last: 1, loop: { from: 0, to: 2 } });
+  run.advance(1100); // step 0 at 100, step 1 at 600; the next go is due at 1100
+  run.state.tempo = 60;
+  run.transport.retime(120);
+  run.advance(4000);
+  const lands = run.state.log.map((entry) => [entry.index, entry.lands]);
+  assert.deepEqual(lands.slice(0, 4), [[0, 100], [1, 600], [0, 1100], [1, 2100]], "the second go runs at the new tempo");
+  assert.ok(!run.state.log.some((entry) => entry.index > 1), "nothing past the passage is played");
+});
+
+test("a range without a loop ends after its last step", () => {
+  const { transport, state, advance } = bench({ times: [0, 1, 2, 3] });
+  transport.start(1, { last: 2 });
+  advance(5000);
+  assert.deepEqual(state.log.map((entry) => entry.index), [1, 2]);
+  assert.equal(state.finished, 300 + 500 + 500);
+});
