@@ -23,6 +23,7 @@ export function defaultState() {
     look: defaultLook(), // the piano, the player and the place, by name (see looks.js)
     corrections: { fingers: {}, hands: {} },
     lesson: null, // { from, to, stage, phase }: the passage being learnt (see lesson.js), or none
+    passage: null, // { from, to, times }: the measures Play plays, and how many times (null: over and over), instead of the piece from here on
     pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note] }
     command: null, // { seq, type }: the last thing an agent asked the page to do
   };
@@ -65,6 +66,17 @@ export function cleanHandMoves(value) {
     }
   }
   return clean;
+}
+
+// A stretch of measures for Play to keep to: measure indexes from 0, and how
+// many times through (null for over and over).
+export function cleanPassage(value) {
+  if (!isObject(value)) return null;
+  const from = Number(value.from);
+  const to = Number(value.to ?? value.from);
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) return null;
+  const times = Number(value.times);
+  return { from, to, times: Number.isInteger(times) && times >= 1 ? Math.min(times, 99) : null };
 }
 
 // A hand position given directly: which finger on which note, and which of
@@ -118,6 +130,7 @@ export function cleanState(value) {
     state.corrections = { fingers: cleanFingers(value.corrections.fingers), hands: cleanHandMoves(value.corrections.hands) };
   }
   state.lesson = cleanLesson(value.lesson);
+  state.passage = cleanPassage(value.passage);
   if (isObject(value.pose)) for (const hand of ["left", "right"]) state.pose[hand] = cleanPose(value.pose[hand]);
   if (isObject(value.command) && COMMANDS.includes(value.command.type)) {
     state.command = { seq: Number(value.command.seq) || 0, type: value.command.type, by: String(value.command.by ?? "") };

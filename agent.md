@@ -92,8 +92,9 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `corrections.fingers` | `{ "<moment>": { "<hand>": { "<note>": <finger 1–5> } } }`. Overrides the score's and the app's fingering at that moment. See "Corrections". |
 | `corrections.hands` | `{ "<moment>": { "<note>": "left" \| "right" } }`. Gives a note to the other hand at that moment. |
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
+| `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`. Measure indexes count from 0. See "Playing a passage". |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
-| `lesson` | The passage being learnt, or `null`: `{ "from": <measure index>, "to": <measure index>, "stage": "right" \| "left" \| "both", "phase": "position" \| "show" \| "once" \| "ramp" }`. Measure indexes count from 0. See "Lessons". |
+| `lesson` | The passage being learnt, or `null`: `{ "from": <measure index>, "to": <measure index>, "stage": "right" \| "left" \| "both", "phase": "intro" \| "position" \| "show" \| "once" \| "ramp" }`. Measure indexes count from 0. See "Lessons". |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -167,6 +168,25 @@ piece it clears them; if you change `score` yourself, send
 `"corrections": { "fingers": null, "hands": null }` too unless you mean to keep
 them. Copy a workspace to try a different set.
 
+## Playing a passage
+
+To play just some measures, at any speed, any number of times, set `passage`
+with the tempo and start playing from its first measure (`time` is that
+measure's start in quarter notes):
+
+```sh
+# Measure 5 alone, three times, at 50 beats a minute
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"passage": {"from": 4, "to": 4, "times": 3}, "tempo": 50, "time": 16, "playing": true}' $BASE/api/workspaces/$WS
+```
+
+Each go starts on the beat the last one ended on. After the last, `playing`
+goes false; with `"times": null` it loops until stopped. The measures are
+tinted in the notation. While `passage` is set, Play plays it again; send
+`"passage": null` to give Play the whole piece back. `hands` chooses which
+hand is seen and heard, as always. A lesson has its own passage and takes
+precedence.
+
 ## Posing a hand
 
 `pose.right` (or `.left`) takes a hand off the score and puts it where you
@@ -188,7 +208,9 @@ curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
 
 ## Lessons
 
-A lesson takes a few measures through three stages, `right` hand, then
+A lesson opens with `phase: "intro"`: the whole passage, both hands, once,
+at nine tenths of the score's tempo, after which the page moves on by itself.
+It then takes the measures through three stages, `right` hand, then
 `left`, then `both`, and each stage through four phases: `position` (the
 voice places the hand a finger at a time; nothing plays), `show` (the voice
 names the notes in order, the hand playing each, then the passage is played
@@ -203,7 +225,7 @@ says what to do through a voice, and the person presses "Got it" to move on.
 To start one, set it up the way the page does:
 
 ```json
-{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "position" }, "time": 8, "tempo": 60, "hands": { "left": { "show": false, "sound": false }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "intro" }, "time": 8, "tempo": 108, "hands": { "left": { "show": true, "sound": true }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
 ```
 
 The lead browser then talks the phase through and, in a phase that plays,

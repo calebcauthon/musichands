@@ -1,24 +1,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assignFingering } from "../fingering.js";
-import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, FINGER_PAUSE, lessonRange, lessonSteps, phaseLines, phasePlays, slowTempo, spokenNote, stageHands } from "../lesson.js";
+import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, FINGER_PAUSE, introTempo, lessonHands, lessonRange, lessonSteps, phaseLines, phasePlays, slowTempo, spokenNote, stageHands } from "../lesson.js";
 import { parseScore } from "../score-model.js";
 import { readFile } from "node:fs/promises";
 
 test("a lesson starts at the measure shown and takes a few after it", () => {
-  assert.deepEqual(defaultLesson(2, 16), { from: 2, to: 5, stage: "right", phase: "position" });
-  assert.deepEqual(defaultLesson(14, 16), { from: 14, to: 15, stage: "right", phase: "position" }, "but not past the end of the piece");
+  assert.deepEqual(defaultLesson(2, 16), { from: 2, to: 5, stage: "right", phase: "intro" });
+  assert.deepEqual(defaultLesson(14, 16), { from: 14, to: 15, stage: "right", phase: "intro" }, "but not past the end of the piece");
   assert.deepEqual(cleanLesson({ from: 1, to: 3, stage: "left", phase: "ramp" }), { from: 1, to: 3, stage: "left", phase: "ramp" });
-  assert.equal(cleanLesson({ from: 1, to: 3, phase: "slow" }).phase, "position", "an unknown phase starts the hand over");
+  assert.equal(cleanLesson({ from: 1, to: 3, phase: "slow" }).phase, "intro", "an unknown phase starts the lesson over");
   assert.equal(cleanLesson({ from: 3, to: 1 }), null);
   assert.equal(cleanLesson("later"), null);
 });
 
 test("got it: place the hand, once through, then loop three beats a minute faster at a go, then the next hand, then done", () => {
   const target = 100;
-  let tempo = slowTempo(target);
-  assert.equal(tempo, 50);
+  assert.equal(slowTempo(target), 50);
+  let tempo = introTempo(target);
+  assert.equal(tempo, 90, "the whole passage is first heard at nearly full speed");
   let lesson = defaultLesson(0, 8);
+  assert.deepEqual(lessonHands(lesson), stageHands("both"), "with both hands");
+  const broken = advanceLesson(lesson, tempo, target);
+  assert.equal(broken.event, "breakdown");
+  assert.deepEqual(broken.lesson, { from: 0, to: 3, stage: "right", phase: "position" }, "then it is broken down, right hand first, slowly");
+  assert.deepEqual(lessonHands(broken.lesson), stageHands("right"));
+  lesson = broken.lesson;
+  tempo = broken.tempo;
   const events = [];
   for (let presses = 0; presses < 200 && lesson; presses += 1) {
     const next = advanceLesson(lesson, tempo, target);
@@ -37,6 +45,7 @@ test("got it: place the hand, once through, then loop three beats a minute faste
   assert.equal(events.at(-1), "both:ramp:done:100");
   assert.equal(events.length, 63);
   assert.equal(lesson, null);
+  assert.equal(phasePlays("intro"), 1);
   assert.equal(phasePlays("position"), 0);
   assert.equal(phasePlays("show"), 2, "the passage is shown a couple of times");
   assert.equal(phasePlays("once"), 1);
@@ -83,7 +92,8 @@ test("the voice places the hand a finger at a time, with time to get there", asy
   const context = { score, positions: fingered.positions, events: fingered.events, tempo: 36, target: 72 };
   const lesson = { from: 0, to: 3, stage: "right", phase: "position" };
   const lines = phaseLines(lesson, context);
-  assert.equal(lines[0], "Let's learn measures 1 to 4 of Minor Descent. Right hand first.");
+  assert.deepEqual(phaseLines({ ...lesson, phase: "intro" }, context), ["We're going to learn measures 1 to 4 of Minor Descent.", "Here it is at nearly full speed."]);
+  assert.equal(lines[0], "Now let's break it down. Right hand first.");
   const placed = lines.filter((line) => line?.say && /^(Thumb|Finger \d|Pinky) on [A-G]( sharp| flat)?\.$/.test(line.say));
   assert.ok(placed.length >= 2, "each finger gets its own line");
   assert.equal(lines[1], placed[0], "straight to the fingers");
@@ -136,6 +146,8 @@ test("the voice places the hand a finger at a time, with time to get there", asy
 
 test("the panel says where the lesson is and what got it will do", () => {
   const lesson = { from: 0, to: 3, stage: "right", phase: "position" };
+  assert.equal(describeProgress({ ...lesson, phase: "intro" }, { tempo: 65, target: 72 }), "The whole passage · at 65");
+  assert.equal(describeNext({ ...lesson, phase: "intro" }, { tempo: 65, target: 72 }), "Skip · break it down");
   assert.equal(describeProgress(lesson, { tempo: 36, target: 72 }), "Right hand · placing the hand");
   assert.equal(describeNext(lesson, { tempo: 36, target: 72 }), "✓ Hand is set");
   assert.equal(describeProgress({ ...lesson, phase: "show" }, { tempo: 36, target: 72 }), "Right hand · the notes");

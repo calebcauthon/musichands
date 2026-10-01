@@ -738,6 +738,7 @@ kbd {
 }
 
 .score-panel {
+  position: relative;
   flex: 0 0 var(--score-strip, 34vh);
   height: var(--score-strip, 34vh);
   padding: 0 var(--space-lg);
@@ -1370,15 +1371,37 @@ kbd {
   background: #e9a63a;
 }
 
-/* Picking the passage to learn. */
-.lesson-range {
+/* Picking the passage to learn: the measures are clicked in the notation,
+   and this bar at the foot of the strip says what is chosen. */
+.lesson-pick {
+  position: absolute;
+  right: var(--space-sm);
+  bottom: var(--space-xs);
+  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-md);
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 0 10px 24px -14px oklch(20% 0.04 50 / 0.8);
 }
 
-.lesson-range .field--inline {
-  gap: var(--space-xs);
+.lesson-pick[hidden] {
+  display: none;
+}
+
+.lesson-pick__text {
+  font-size: 0.85rem;
+}
+
+.lesson-pick .button {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+body.picking-lesson .score-container {
+  cursor: pointer;
 }
 
 /* Choosing what to see and hear of each hand. */

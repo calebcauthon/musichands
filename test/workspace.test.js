@@ -7,7 +7,7 @@ import { applyHandMoves, countCorrections, matchingMoments, withCorrection } fro
 import { assignFingering } from "../fingering.js";
 import { createAppServer } from "../server.js";
 import { parseConnection, workspaceFromHash } from "../workspace-client.js";
-import { cleanPose, cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
+import { cleanPassage, cleanPose, cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
 
 const event = (measure, beat, hand, midis) => ({ measure: String(measure), beat, hand, time: (measure - 1) * 4 + beat - 1, duration: 1, attack: true, notes: midis.map((midi) => ({ midi, note: `n${midi}`, duration: 1 })) });
 
@@ -315,7 +315,7 @@ test("a lesson is part of the state, and a null takes it away", () => {
   assert.equal(state.lesson, null);
   assert.equal(cleanState({ lesson: { from: 4, to: 2 } }).lesson, null, "a range that ends before it starts is no lesson");
   assert.deepEqual(cleanState({ lesson: { from: "1", to: 1.5 } }).lesson, null);
-  assert.deepEqual(cleanState({ lesson: { from: 1, to: 1, stage: "feet" } }).lesson, { from: 1, to: 1, stage: "right", phase: "position" });
+  assert.deepEqual(cleanState({ lesson: { from: 1, to: 1, stage: "feet" } }).lesson, { from: 1, to: 1, stage: "right", phase: "intro" });
 });
 
 test("the voice reads a line once and keeps it, behind the workspace token", async () => {
@@ -370,4 +370,17 @@ test("a hand can be put somewhere directly, finger by finger, and given back to 
   assert.deepEqual(state.pose.right.press, ["D4"]);
   state = mergeState(state, { pose: { right: null } });
   assert.equal(state.pose.right, null);
+});
+
+test("Play can be kept to a stretch of measures, a set number of times or over and over", () => {
+  assert.deepEqual(cleanPassage({ from: 4, to: 5, times: 3 }), { from: 4, to: 5, times: 3 });
+  assert.deepEqual(cleanPassage({ from: 4 }), { from: 4, to: 4, times: null }, "one measure, over and over");
+  assert.equal(cleanPassage({ from: 5, to: 4 }), null);
+  assert.deepEqual(cleanPassage({ from: 0, to: 1, times: 0 }), { from: 0, to: 1, times: null });
+  let state = mergeState(defaultState(), { passage: { from: 2, to: 3, times: 2 } });
+  assert.deepEqual(state.passage, { from: 2, to: 3, times: 2 });
+  state = mergeState(state, { passage: { times: null } });
+  assert.deepEqual(state.passage, { from: 2, to: 3, times: null }, "a null count is over and over");
+  state = mergeState(state, { passage: null });
+  assert.equal(state.passage, null);
 });

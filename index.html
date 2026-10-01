@@ -30,6 +30,12 @@
       <section class="theater" aria-label="The music and the hands">
         <div class="score-panel" aria-label="Sheet music">
           <div id="score-container" class="score-container"></div>
+          <!-- Choosing the passage to learn: click its first measure in the notation, then its last. -->
+          <div class="lesson-pick" id="lesson-pick" hidden>
+            <span class="lesson-pick__text" id="lesson-pick-text">Click the first measure to learn, then the last.</span>
+            <button class="button button--primary" type="button" id="lesson-start" title="Learn these measures (Enter)">Start learning</button>
+            <button class="button" type="button" id="lesson-cancel" title="Never mind (Escape)">Cancel</button>
+          </div>
         </div>
         <div class="hands-panel">
           <div class="transport" role="group" aria-label="Play the score">
@@ -51,7 +57,7 @@
               <input id="numbers-toggle" type="checkbox" checked />
               <span>Finger numbers</span>
             </label>
-            <button class="button learn-button" type="button" id="learn" aria-pressed="false" title="Learn a few measures: one hand, then the other, then both, slowly and then faster (L)">Learn</button>
+            <button class="button learn-button" type="button" id="learn" aria-pressed="false" title="Learn a few measures: pick them in the notation, then one hand, the other, and both, slowly and then faster (L)">Learn</button>
             <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
             <button class="button gear" type="button" id="settings-open" title="Detail, agents and the look of the notation" aria-label="Settings">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -106,29 +112,6 @@
             <span class="status-dot" aria-hidden="true"></span>
             <span id="sheet-status-text">Reading the score</span>
           </p>
-        </form>
-      </dialog>
-
-      <dialog class="sheet-dialog" id="lesson-dialog" aria-labelledby="lesson-dialog-title">
-        <form method="dialog" class="sheet-dialog__form">
-          <div class="sheet-dialog__head">
-            <h2 id="lesson-dialog-title">Learn a passage</h2>
-            <button class="sheet-dialog__close" type="submit" aria-label="Close">×</button>
-          </div>
-          <p class="sheet-dialog__hint">A few measures at a time: the right hand, then the left, then both together. For each, the voice places your hand a finger at a time, plays the passage through once slowly, then loops it and goes up three beats a minute at each “Got it” until the score's own tempo. The hands are seen from straight above.</p>
-          <div class="lesson-range">
-            <label class="field field--inline">
-              <span>From measure</span>
-              <select id="lesson-from" aria-label="First measure"></select>
-            </label>
-            <label class="field field--inline">
-              <span>To measure</span>
-              <select id="lesson-to" aria-label="Last measure"></select>
-            </label>
-          </div>
-          <div class="sheet-dialog__actions">
-            <button class="button button--primary" type="button" id="lesson-start">Start learning</button>
-          </div>
         </form>
       </dialog>
 

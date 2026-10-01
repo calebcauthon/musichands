@@ -9,7 +9,7 @@ import { applyHandMoves, countCorrections } from "./corrections.js";
 import { applyChoices, HANDS } from "./hand-choices.js";
 import { HandPlayer } from "./hand-player.js";
 import { createHandView } from "./hand-view.js";
-import { advanceLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, lessonRange, lessonSteps, OVERHEAD, phaseLines, phasePlays, slowTempo, stageHands } from "./lesson.js";
+import { advanceLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, introTempo, lessonHands, lessonRange, lessonSteps, OVERHEAD, phaseLines, phasePlays, stageHands } from "./lesson.js";
 import { PianoAudio } from "./piano-audio.js";
 import { LOOK_KINDS, LOOKS } from "./looks.js";
 import { readMxl } from "./mxl.js";
@@ -24,7 +24,7 @@ const songList = document.querySelector("#song-list");
 const scoreFile = document.querySelector("#score-file");
 const scoreTitle = document.querySelector("#score-title");
 const removeScore = document.querySelector("#remove-score");
-const dialogs = { song: document.querySelector("#song-dialog"), settings: document.querySelector("#settings-dialog"), lesson: document.querySelector("#lesson-dialog") };
+const dialogs = { song: document.querySelector("#song-dialog"), settings: document.querySelector("#settings-dialog") };
 const scoreContainer = document.querySelector("#score-container");
 const status = document.querySelector("#sheet-status");
 const statusText = document.querySelector("#sheet-status-text");
@@ -52,8 +52,7 @@ const lessonPanel = {
   restart: document.querySelector("#lesson-restart"),
   again: document.querySelector("#lesson-again"),
 };
-const lessonFrom = document.querySelector("#lesson-from");
-const lessonTo = document.querySelector("#lesson-to");
+const lessonPick = { root: document.querySelector("#lesson-pick"), text: document.querySelector("#lesson-pick-text") };
 const bar = {
   connect: document.querySelector("#workspace-connect"),
   home: document.querySelector("#workspace-home"),
@@ -81,6 +80,7 @@ const page = {
   fullScreen: false, // the piano fills the window, under the line of music being played
   bands: null, // where each line of music sits in the notation as drawn; worked out when asked for
   measureShown: null, // the measure the hands were last shown in
+  picking: null, // choosing a passage to learn: { from, to, anchor } in measure indexes; anchor is the end clicked first, while the other is awaited
   poseArrived: false, // a told pose has just changed, so its pressed keys are struck
   notes: [],
   doubts: [],
@@ -203,6 +203,7 @@ function refinger(corrections) {
 // Fetches and reads one of the workspace's scores. Returns false if it cannot.
 async function loadScore(score) {
   stopTransport();
+  showPicking(null);
   if (!score) {
     page.score = null;
     page.xml = null;
@@ -420,6 +421,7 @@ async function renderNotation(xmlText) {
       page.cursorAt = null;
       page.bands = null;
       drawStaffGuides();
+      drawLessonRange();
       showScoreStrip();
     };
   }
@@ -518,37 +520,82 @@ function notationUnit(svg) {
   return 10 * (page.osmd.zoom ?? 1) * (width / Number(svg.getAttribute("width") || width));
 }
 
+// Where each measure sits in the notation, in OSMD's layout units: the whole
+// grand-staff column of each, by its place in the piece.
+function measureBoxes() {
+  const boxes = [];
+  for (const measureRow of page.osmd?.GraphicSheet?.MeasureList ?? []) {
+    // Each row holds one box per staff.
+    const shapes = measureRow.filter(Boolean).map((measure) => measure.PositionAndShape);
+    if (!shapes.length) continue;
+    const measure = measureRow.find(Boolean);
+    boxes.push({
+      index: measure.parentSourceMeasure?.measureListIndex ?? measure.MeasureNumber - 1,
+      left: Math.min(...shapes.map((box) => box.AbsolutePosition.x)),
+      right: Math.max(...shapes.map((box) => box.AbsolutePosition.x + box.Size.width)),
+      top: Math.min(...shapes.map((box) => box.AbsolutePosition.y)),
+      bottom: Math.max(...shapes.map((box) => box.AbsolutePosition.y + Math.max(box.Size.height, 4))),
+    });
+  }
+  return boxes;
+}
+
 // Clicking a measure in the notation jumps the hands to that measure. The
 // listener sits on the container because OSMD replaces its SVG on every render.
 function measureAtPoint(clientX, clientY) {
-  const { osmd } = page;
   const svg = scoreContainer.querySelector("svg");
-  if (!osmd?.GraphicSheet || !svg) return null;
+  if (!page.osmd?.GraphicSheet || !svg) return null;
   const rect = svg.getBoundingClientRect();
   const unit = notationUnit(svg);
   const x = (clientX - rect.left) / unit;
   const y = (clientY - rect.top) / unit;
-  for (const measureRow of osmd.GraphicSheet.MeasureList) {
-    // Each row holds one box per staff; treat the whole grand-staff column as one target.
-    const boxes = measureRow.filter(Boolean).map((measure) => measure.PositionAndShape);
-    if (!boxes.length) continue;
-    const left = Math.min(...boxes.map((box) => box.AbsolutePosition.x));
-    const right = Math.max(...boxes.map((box) => box.AbsolutePosition.x + box.Size.width));
-    const top = Math.min(...boxes.map((box) => box.AbsolutePosition.y)) - 3;
-    const bottom = Math.max(...boxes.map((box) => box.AbsolutePosition.y + Math.max(box.Size.height, 4))) + 3;
-    if (x >= left && x <= right && y >= top && y <= bottom) {
-      const measure = measureRow.find(Boolean);
-      return measure.parentSourceMeasure?.measureListIndex ?? measure.MeasureNumber - 1;
-    }
+  return measureBoxes().find((box) => x >= box.left && x <= box.right && y >= box.top - 3 && y <= box.bottom + 3)?.index ?? null;
+}
+
+// The passage being learnt, or being chosen, is tinted in the notation.
+function drawLessonRange() {
+  const svg = scoreContainer.querySelector("svg");
+  if (!svg) return;
+  svg.querySelector(".lesson-range")?.remove();
+  const range = page.picking ?? ws?.state?.lesson ?? ws?.state?.passage;
+  if (!range || !page.osmd?.GraphicSheet) return;
+  const unit = 10 * (page.osmd.zoom ?? 1);
+  const layer = document.createElementNS(SVG_NS, "g");
+  layer.setAttribute("class", "lesson-range");
+  layer.setAttribute("pointer-events", "none");
+  const boxes = measureBoxes();
+  for (const box of boxes) {
+    if (box.index < range.from || box.index > range.to) continue;
+    // One even band along the line of music, whatever each measure holds.
+    const line = boxes.filter((other) => Math.abs(other.top - box.top) < 0.5);
+    const bottom = Math.max(...line.map((other) => other.bottom));
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", (box.left * unit).toFixed(1));
+    rect.setAttribute("y", ((box.top - 2) * unit).toFixed(1));
+    rect.setAttribute("width", ((box.right - box.left) * unit).toFixed(1));
+    rect.setAttribute("height", ((bottom - box.top + 4) * unit).toFixed(1));
+    rect.setAttribute("fill", "#e9a63a");
+    rect.setAttribute("fill-opacity", page.picking ? "0.3" : "0.16");
+    layer.append(rect);
   }
-  return null;
+  svg.prepend(layer); // under the notes
 }
 
 scoreContainer.addEventListener("click", (event) => {
   const index = measureAtPoint(event.clientX, event.clientY);
   if (index === null) return;
+  if (page.picking) {
+    pickMeasure(index);
+    return;
+  }
   const measure = page.score?.measures[index];
   if (measure) goToTime(measure.start);
+});
+// With one end chosen, the passage stretches to the measure under the pointer.
+scoreContainer.addEventListener("mousemove", (event) => {
+  if (page.picking?.anchor === null || page.picking?.anchor === undefined) return;
+  const index = measureAtPoint(event.clientX, event.clientY);
+  if (index !== null) showPicking({ from: Math.min(page.picking.anchor, index), to: Math.max(page.picking.anchor, index), anchor: page.picking.anchor });
 });
 
 // ---------------------------------------------------------------------------
@@ -672,7 +719,7 @@ function showScores() {
 // Points the workspace at another of its pieces. Corrections are by moment,
 // so they stay behind with the piece they were made for.
 function chooseScore({ id, title }) {
-  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null }, lesson: null, pose: { left: null, right: null } });
+  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null }, lesson: null, passage: null, pose: { left: null, right: null } });
 }
 
 scoreTitle.addEventListener("click", () => dialogs.song.showModal());
@@ -819,7 +866,9 @@ const transport = new ScoreTransport({
   done: () => {
     showPlaying(false);
     ws.change({ playing: false });
-    if (ws.state?.lesson) voice.say(describePlayed(ws.state.lesson.phase));
+    // The introduction, once heard, goes straight on to the first hand.
+    if (ws.state?.lesson?.phase === "intro") gotIt();
+    else if (ws.state?.lesson) voice.say(describePlayed(ws.state.lesson.phase));
   },
 });
 
@@ -981,16 +1030,34 @@ function sayAfresh(lines) {
 const scoreTempo = () => page.score?.tempo ?? DEFAULT_TEMPO;
 const lessonKey = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.stage}:${lesson.phase}` : null);
 
-// The lesson's passage as steps to play, as many times as the phase plays
-// it, or null when there is none.
+// The stretch of the piece Play keeps to, as steps and how often to go round:
+// the lesson's passage, as many times as its phase plays it, else the
+// workspace's own `passage`. Null when Play just plays the piece.
 function lessonPassage() {
   const lesson = ws?.state?.lesson;
-  if (!lesson || !page.score) return null;
-  const range = lessonRange(lesson, page.score.measures);
-  const steps = range && lessonSteps(range, page.steps);
+  const range = lesson ?? ws?.state?.passage;
+  if (!range || !page.score) return null;
+  const times = lesson ? phasePlays(lesson.phase) : (range.times ?? Infinity);
+  const span = lessonRange(range, page.score.measures);
+  const steps = span && lessonSteps(span, page.steps);
   if (!steps) return null;
-  const times = phasePlays(lesson.phase);
-  return { ...steps, loop: times > 1 ? { from: range.start, to: range.end, times: Number.isFinite(times) ? times : null } : null };
+  return { ...steps, loop: times > 1 ? { from: span.start, to: span.end, times: Number.isFinite(times) ? times : null } : null };
+}
+
+// Plays measures `from` to `to` (indexes from 0), `times` times (null: over
+// and over), at `tempo` if one is given. Stays the passage Play plays until
+// cleared with clearPassage() or a lesson takes over.
+function playPassage(from, to = from, { times = 1, tempo = null } = {}) {
+  if (!page.score || !ws?.state) return;
+  const passage = { from: Math.min(from, to), to: Math.max(from, to), times };
+  const span = lessonRange(passage, page.score.measures);
+  stopTransport();
+  if (!ws.lead) ws.claimLead().catch(() => {});
+  ws.change({ passage, time: span.start, playing: true, ...(tempo ? { tempo } : {}) });
+}
+
+function clearPassage() {
+  ws?.change({ passage: null });
 }
 
 // Puts the hands on a step without sounding it, as before playing from there.
@@ -1009,36 +1076,53 @@ function playMoment(time) {
   else ws.change({ time }); // a jump is shown at once, with sound
 }
 
-// Offers the measure on screen and the few after it, to change before starting.
+// Choosing the passage in the notation. The measure on screen and the few
+// after it are offered; a click on a measure starts the passage there, and
+// a second click ends it (in either direction).
 function offerLesson() {
   if (!page.score || !ws?.state) return;
   const { measures } = page.score;
-  const shown = page.steps[page.stepIndex]?.measure;
-  const offered = defaultLesson(Math.max(0, measures.findIndex((measure) => measure.number === shown)), measures.length);
-  for (const select of [lessonFrom, lessonTo]) {
-    select.replaceChildren(
-      ...measures.map((measure, index) => {
-        const option = document.createElement("option");
-        option.value = index;
-        option.textContent = measure.number;
-        return option;
-      }),
-    );
+  const here = page.steps[page.stepIndex]?.measure;
+  const offered = defaultLesson(Math.max(0, measures.findIndex((measure) => measure.number === here)), measures.length);
+  if (ws.state.playing) ws.change({ playing: false });
+  showPicking({ from: offered.from, to: offered.to, anchor: null });
+}
+
+function showPicking(picking) {
+  const changed = !page.picking || !picking || page.picking.from !== picking.from || page.picking.to !== picking.to;
+  page.picking = picking;
+  document.body.classList.toggle("picking-lesson", Boolean(picking));
+  lessonPick.root.hidden = !picking;
+  if (!ws?.state?.lesson) learnButton.setAttribute("aria-pressed", String(Boolean(picking)));
+  if (picking) {
+    const number = (index) => page.score.measures[index].number;
+    const chosen = picking.from === picking.to ? `Measure ${number(picking.from)}` : `Measures ${number(picking.from)}–${number(picking.to)}`;
+    lessonPick.text.textContent = picking.anchor === null ? `${chosen}. Click a measure to start somewhere else.` : `${chosen}. Now click the last measure.`;
   }
-  lessonFrom.value = offered.from;
-  lessonTo.value = offered.to;
-  dialogs.lesson.showModal();
+  if (changed) drawLessonRange();
+}
+
+function pickMeasure(index) {
+  const { anchor } = page.picking;
+  if (anchor === null) showPicking({ from: index, to: index, anchor: index });
+  else showPicking({ from: Math.min(anchor, index), to: Math.max(anchor, index), anchor: null });
+}
+
+function startPicked() {
+  const { from, to } = page.picking;
+  showPicking(null);
+  startLesson(from, to);
 }
 
 // Puts the workspace at the start of the passage, one hand, slow, seen from
 // above. The stage change is narrated and then played by showLesson().
 function startLesson(from, to) {
-  const lesson = { from: Math.min(from, to), to: Math.max(from, to), stage: "right", phase: "position" };
+  const lesson = { from: Math.min(from, to), to: Math.max(from, to), stage: "right", phase: "intro" };
   const range = lessonRange(lesson, page.score.measures);
   if (!range) return;
   if (!ws.lead) ws.claimLead().catch(() => {});
   const camera = { ...ws.state.camera, view: { ...OVERHEAD }, autoCut: false };
-  ws.change({ lesson, time: range.start, tempo: slowTempo(scoreTempo()), hands: stageHands(lesson.stage), camera, playing: false, pose: NO_POSE });
+  ws.change({ lesson, time: range.start, tempo: introTempo(scoreTempo()), hands: lessonHands(lesson), camera, playing: false, pose: NO_POSE, passage: null });
   handsView.setCamera(camera); // a local change is not laid back on the stage by applyLatest()
 }
 
@@ -1053,10 +1137,10 @@ function gotIt() {
   if (!lesson || !page.score) return;
   const target = scoreTempo();
   const next = advanceLesson(lesson, page.tempo, target);
-  if (["show", "once", "ramp", "stage"].includes(next.event)) {
+  if (["breakdown", "show", "once", "ramp", "stage"].includes(next.event)) {
     // A new phase: back to the top of the passage, quiet, the hands back to the score's, for the voice to introduce it (showLesson).
     const range = lessonRange(next.lesson, page.score.measures);
-    ws.change({ lesson: next.lesson, tempo: next.tempo, hands: stageHands(next.lesson.stage), time: range.start, playing: false, pose: NO_POSE });
+    ws.change({ lesson: next.lesson, tempo: next.tempo, hands: lessonHands(next.lesson), time: range.start, playing: false, pose: NO_POSE });
     return;
   }
   if (next.event === "done") ws.change({ lesson: null, tempo: target, hands: stageHands("both"), playing: false, pose: NO_POSE });
@@ -1116,6 +1200,11 @@ function showLesson(state, { by, local }) {
     lessonPanel.play.textContent = state.playing ? "⏸ Pause" : "▶ Play";
     lessonPanel.play.title = state.playing ? "Pause the passage" : phasePlays(lesson.phase) === Infinity ? "Play the passage on a loop" : "Play the passage";
   }
+  const rangeKey = JSON.stringify([lesson?.from, lesson?.to, state.passage?.from, state.passage?.to]);
+  if (rangeKey !== shown.lessonRange) {
+    shown.lessonRange = rangeKey;
+    drawLessonRange();
+  }
   const key = lessonKey(lesson);
   if (key === shown.lesson) return;
   const wasOn = Boolean(shown.lesson);
@@ -1129,11 +1218,9 @@ function showLesson(state, { by, local }) {
   narratePhase(lesson);
 }
 
-learnButton.addEventListener("click", () => (ws?.state?.lesson ? stopLesson() : offerLesson()));
-document.querySelector("#lesson-start").addEventListener("click", () => {
-  dialogs.lesson.close();
-  startLesson(Number(lessonFrom.value), Number(lessonTo.value));
-});
+learnButton.addEventListener("click", () => (ws?.state?.lesson ? stopLesson() : page.picking ? showPicking(null) : offerLesson()));
+document.querySelector("#lesson-start").addEventListener("click", startPicked);
+document.querySelector("#lesson-cancel").addEventListener("click", () => showPicking(null));
 lessonPanel.next.addEventListener("click", gotIt);
 lessonPanel.stop.addEventListener("click", stopLesson);
 lessonPanel.play.addEventListener("click", togglePlaying);
@@ -1162,6 +1249,13 @@ window.addEventListener("keydown", (event) => {
   const target = event.target;
   const ticks = target.matches("input") && ["checkbox", "radio"].includes(target.type);
   if (target.matches("select, textarea") || (target.matches("input") && !ticks)) return;
+  // While a passage is being chosen, Enter takes it and Escape drops it, whatever has focus.
+  if (page.picking && (event.key === "Enter" || event.key === "Escape") && !document.querySelector("dialog[open]")) {
+    if (event.key === "Enter") startPicked();
+    else showPicking(null);
+    event.preventDefault();
+    return;
+  }
   if (target.matches("button, summary, a, input") && (event.key === " " || event.key === "Enter")) return;
   if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (!ws?.state || document.querySelector("dialog[open]")) return;
@@ -1174,7 +1268,7 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
   else if (event.key === "n" || event.key === "N") ws.change({ numbers: !ws.state.numbers });
   else if (event.key === "f" || event.key === "F") setFullScreen(!page.fullScreen);
-  else if (event.key === "l" || event.key === "L") offerLesson();
+  else if (event.key === "l" || event.key === "L") (page.picking ? showPicking(null) : ws.state.lesson ? null : offerLesson());
   else if (event.key === "g" || event.key === "G") gotIt();
   else if (event.key === "Escape" && page.fullScreen) setFullScreen(false);
   else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
@@ -1421,5 +1515,5 @@ window.addEventListener("hashchange", () => {
   if (entry && entry.id !== ws?.id) openWorkspace(entry).catch((error) => setWorkspaceStatus(`That workspace could not be opened: ${error.message}`, "outside"));
 });
 
-window.musichands = { page, view: handsView, get workspace() { return ws; } };
+window.musichands = { page, view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
 await openFirstWorkspace();
