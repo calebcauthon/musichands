@@ -130,7 +130,9 @@ export function spokenNote(note) {
 }
 
 const HAND_NAMES = { right: "right hand", left: "left hand", both: "both hands" };
-const FINGER_NAMES = { 1: "Thumb", 2: "Finger 2", 3: "Finger 3", 4: "Finger 4", 5: "Pinky" };
+// Fingers by the names people call them, never by number; the short names are for several at once.
+const FINGER_NAMES = { 1: "Thumb", 2: "Pointer finger", 3: "Middle finger", 4: "Ring finger", 5: "Pinky" };
+const FINGER_SHORT = { 1: "thumb", 2: "pointer", 3: "middle", 4: "ring", 5: "pinky" };
 const capital = (text) => text[0].toUpperCase() + text.slice(1);
 
 // The positions a hand takes through the passage, in order.
@@ -165,26 +167,58 @@ function placeHand(hand, positions, range) {
 
 const list = (items) => (items.length <= 1 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`);
 
-// The notes of the passage in the order the hand plays them, each with its
-// finger. Each line carries the score time of its moment, so the hand on the
-// screen can play it as it is named. A moment the same as the last is "Again".
+// The notes of the passage, finger first: "Pinky on A", "Thumb, middle and
+// pinky on A, C and E". Before them, how many there are and the fingers that
+// play them. Each different note is explained once, the first time the hand
+// plays it, and its line carries the score time of that moment, so the hand
+// on the screen can play it as it is named. Then the whole run is said
+// through quickly, notes then fingers: "G, C, E, G, C, E with thumb, middle
+// and pinky".
 function nameNotes(hand, events, range) {
   const played = events.filter((event) => event.hand === hand && event.attack && event.time >= range.start - 1e-6 && event.time < range.end - 1e-6);
-  const lines = [];
-  let last = null;
+  const moments = [];
   for (const event of played.slice(0, NOTES_NAMED)) {
     const struck = event.notes.filter((note) => !note.held).sort((a, b) => a.midi - b.midi);
     if (!struck.length) continue;
-    const same = struck.map((note) => `${note.midi}:${note.finger}`).join(",");
     const fingers = struck.map((note) => note.finger).filter(Boolean);
-    let say;
-    if (same === last) say = "Again.";
-    else if (struck.length === 1) say = `${spokenNote(struck[0].note)}${fingers.length ? `, ${FINGER_NAMES[fingers[0]].toLowerCase()}` : ""}.`;
-    else say = `${list(struck.map((note) => spokenNote(note.note)))} together${fingers.length === struck.length ? `, fingers ${list(fingers)}` : ""}.`;
-    last = same;
-    lines.push({ say, time: event.time }, NOTE_PAUSE);
+    const fingered = fingers.length === struck.length;
+    const notes = list(struck.map((note) => spokenNote(note.note)));
+    const chord = struck.length > 1;
+    moments.push({
+      time: event.time,
+      chord,
+      // The fingers alone, for the count at the start.
+      notes: struck.map((note) => spokenNote(note.note)).join(" "),
+      each: fingers,
+      fingers: !fingered ? notes : chord ? `${list(fingers.map((finger) => FINGER_SHORT[finger]))} together` : FINGER_NAMES[fingers[0]].toLowerCase(),
+      say: !fingered ? `${notes}${chord ? " together" : ""}.` : chord ? `${capital(list(fingers.map((finger) => FINGER_SHORT[finger])))} on ${notes}.` : `${FINGER_NAMES[fingers[0]]} on ${notes}.`,
+    });
   }
-  if (played.length > NOTES_NAMED) lines.push("And so on.");
+  if (!moments.length) return [];
+  const more = played.length > NOTES_NAMED;
+  const chords = moments.filter((moment) => moment.chord).length;
+  const what = chords === 0 ? "note" : chords === moments.length ? "chord" : "notes and chord";
+  const count = `${more ? "the first " : ""}${moments.length} ${what}${moments.length === 1 ? "" : "s"}`;
+  // The same fingers several times running are told once, with how often.
+  const runs = [];
+  for (const moment of moments) {
+    if (runs.at(-1)?.fingers === moment.fingers) runs.at(-1).times += 1;
+    else runs.push({ fingers: moment.fingers, times: 1 });
+  }
+  const often = (times) => (times === 1 ? "" : times === 2 ? ", twice" : `, ${times} times`);
+  const told = runs.map((run) => `${run.fingers}${often(run.times)}`).join(chords || runs.some((run) => run.times > 1) ? "; " : ", ");
+  const lines = [`Going to hit ${count}: ${told}.`, NOTE_PAUSE];
+  const explained = new Set();
+  for (const moment of moments) {
+    if (explained.has(moment.say)) continue; // by what is said: the same note an octave away sounds the same in words
+    explained.add(moment.say);
+    lines.push({ say: moment.say, time: moment.time }, NOTE_PAUSE);
+  }
+  // The run as it goes, said straight through.
+  if (moments.length > 1) {
+    const used = [...new Set(moments.flatMap((moment) => moment.each))].map((finger) => FINGER_SHORT[finger]);
+    lines.push(`${moments.map((moment) => moment.notes).join(", ")}${more ? ", and so on," : ""}${used.length ? ` with ${list(used)}` : ""}.`, NOTE_PAUSE);
+  }
   return lines;
 }
 
@@ -202,7 +236,7 @@ export function phaseLines(lesson, { score, positions, events, tempo, target }) 
   if (lesson.phase === "show") {
     const times = SHOW_TIMES === 2 ? "twice" : `${SHOW_TIMES} times`;
     if (lesson.stage === "both") return [`Watch both hands together. I'll play it ${times}.`];
-    return ["Here are the notes.", ...nameNotes(lesson.stage, events, range), `Now watch. I'll play it ${times}.`];
+    return [...nameNotes(lesson.stage, events, range), `Now watch. I'll play it ${times}.`];
   }
   if (lesson.phase === "once") return [`Now your turn. Once through, slowly, at ${tempo}. Play along.`];
   if (lesson.phase === "ramp") return [`Good. Now it loops. Try ${tempo}; when it's clean, press Got it and we go up ${RAMP} beats a minute at a time, to ${target}.`];

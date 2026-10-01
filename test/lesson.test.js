@@ -94,7 +94,7 @@ test("the voice places the hand a finger at a time, with time to get there", asy
   const lines = phaseLines(lesson, context);
   assert.deepEqual(phaseLines({ ...lesson, phase: "intro" }, context), ["We're going to learn measures 1 to 4 of Minor Descent.", "Here it is at nearly full speed."]);
   assert.equal(lines[0], "Now let's break it down. Right hand first.");
-  const placed = lines.filter((line) => line?.say && /^(Thumb|Finger \d|Pinky) on [A-G]( sharp| flat)?\.$/.test(line.say));
+  const placed = lines.filter((line) => line?.say && /^(Thumb|Pointer finger|Middle finger|Ring finger|Pinky) on [A-G]( sharp| flat)?\.$/.test(line.say));
   assert.ok(placed.length >= 2, "each finger gets its own line");
   assert.equal(lines[1], placed[0], "straight to the fingers");
   assert.equal(lines[lines.indexOf(placed[0]) + 1], FINGER_PAUSE, "and a pause after it");
@@ -111,7 +111,7 @@ test("the voice places the hand a finger at a time, with time to get there", asy
 
   const left = phaseLines({ ...lesson, stage: "left" }, context);
   assert.equal(left[0], "Now the left hand.");
-  assert.match(left[1].say, /^(Thumb|Finger \d|Pinky) on /);
+  assert.match(left[1].say, /^(Thumb|Pointer finger|Middle finger|Ring finger|Pinky) on /);
   assert.deepEqual(Object.keys(left[1].pose), ["left"]);
   const both = phaseLines({ ...lesson, stage: "both" }, context);
   assert.equal(both[0], "Now both hands together.");
@@ -123,15 +123,22 @@ test("the voice places the hand a finger at a time, with time to get there", asy
 
   // Showing: each moment named with its finger and played as it is named, then the passage played to watch.
   const shown = phaseLines({ ...lesson, phase: "show" }, context);
-  assert.equal(shown[0], "Here are the notes.");
+  assert.match(shown[0], /^Going to hit 5 notes and chords: pinky; ring finger; pinky and middle together; /, "first how many, and the fingers that play them");
   const named = shown.filter((line) => line?.time !== undefined);
   const struck = fingered.events.filter((event) => event.hand === "right" && event.attack && event.time < score.measures[3].start + score.measures[3].length);
-  assert.deepEqual(named.map((line) => line.time), struck.map((event) => event.time), "one line for each moment the hand plays, in order");
-  assert.match(named[0].say, /^[A-G]( sharp| flat)?, (thumb|finger \d|pinky)\.$|together, fingers /);
+  assert.ok(named.length < struck.length, "a note the hand has already been shown is not explained again");
+  assert.equal(new Set(named.map((line) => line.say)).size, named.length);
+  assert.equal(named[0].time, struck[0].time, "each is played as it is named");
+  assert.equal(shown.at(-3), "A, G, A F, A E, A with pinky, ring, middle and pointer.", "then the whole run, notes and then fingers");
+  assert.match(named[0].say, /^(Thumb|Pointer finger|Middle finger|Ring finger|Pinky) on [A-G]( sharp| flat)?\.$/, "the finger, then the note");
   assert.equal(shown.at(-1), "Now watch. I'll play it twice.");
-  const leftShown = phaseLines({ ...lesson, stage: "left", phase: "show" }, context).filter((line) => line?.say).map((line) => line.say);
-  assert.ok(leftShown.some((say) => /^[A-G].* and [A-G]( sharp| flat)? together, fingers \d.* and \d\.$/.test(say)), "a chord is named whole, with its fingers");
-  assert.ok(leftShown.includes("Again."), "a chord played again is not spelt out again");
+  const leftLines = phaseLines({ ...lesson, stage: "left", phase: "show" }, context);
+  assert.equal(leftLines[0], "Going to hit 7 chords: thumb, middle and pinky together, 4 times; thumb and middle together, 3 times.", "the same fingers running are told once");
+  const leftShown = leftLines.filter((line) => line?.say).map((line) => line.say);
+  assert.ok(leftShown.includes("Thumb, middle and pinky on A, C and E."), "a chord is named whole, its fingers first");
+  assert.equal(leftShown.length, 4, "the four different chords, once each");
+  assert.equal(leftLines.at(-3), "A C E, A C E, A C F, A C F, G C, G sharp B, G sharp B with thumb, middle and pinky.");
+  assert.ok(lines.concat(shown, leftLines).every((line) => !/finger \d|\d on /i.test(line.say ?? String(line))), "fingers are never called by number");
   assert.deepEqual(phaseLines({ ...lesson, stage: "both", phase: "show" }, context), ["Watch both hands together. I'll play it twice."]);
   assert.match(describePlayed("show"), /ready to try it/);
   assert.match(describePlayed("once"), /go again/);
