@@ -40,6 +40,8 @@ export function mountLearning(app, root = document) {
   let opening = true; // the workspace has only just been opened: nothing has been laid on the screen yet
 
   let turn = 0; // which narration is the one going on; a later one, or a stop, overtakes it
+  let told = null; // the step, by key, whose lines have been said right through
+  let ended = false; // what the step plays has played out, so Play starts it from the top
   let planned = null; // the plan for the passage being learnt: { key, plan (a promise), ready (the plan, once it is there) }
 
   // The panel shows what has been said in the phase so far, a line at a
@@ -49,7 +51,9 @@ export function mountLearning(app, root = document) {
     onLine: (line) => {
       const words = shownText(line);
       panel.caption.textContent = panel.caption.textContent ? `${panel.caption.textContent} ${words}` : words;
+      paint();
     },
+    onDone: () => paint(),
   });
   function sayAfresh(lines) {
     voice.stop();
@@ -184,15 +188,47 @@ export function mountLearning(app, root = document) {
   // may come with something for the hands to do as it is said: a pose to
   // take, or a moment of the piece to play.
   function narrate(lesson, step, still, { thenPlay = true } = {}) {
+    const key = keyOf(lesson);
+    if (told === key) told = null;
     const lines = step.lines.map((line) => {
       if (line?.pose) return { say: line.say, before: () => still() && app.change({ pose: line.pose }) };
       if (line?.time !== undefined) return { say: line.say, before: () => still() && app.playMoment(line.time) };
       return line;
     });
     sayAfresh(lines).then((ending) => {
-      if (!thenPlay || !step.times || ending === "dropped" || !still() || app.state.playing) return;
+      if (ending === "dropped" || !still()) return;
+      told = key;
+      paint();
+      if (!thenPlay || !step.times || app.state.playing) return;
+      ended = false;
       app.playFrom(lessonRange(lesson, app.score.measures).start);
     });
+  }
+
+  // Pause stops the lesson where it is, the voice and the music both. Play
+  // carries on: a step that was still being talked through is said again
+  // from its start (and then played); one that was playing goes on from
+  // where it stopped, or from the top if it had played out.
+  function pauseOrPlay() {
+    const lesson = current();
+    const step = stepNow(lesson);
+    if (!step) return;
+    if (voice.speaking || app.state.playing) {
+      turn += 1; // nothing that was waiting to be said or played goes ahead
+      voice.stop();
+      if (app.state.playing) app.change({ playing: false });
+      paint();
+      return;
+    }
+    const key = keyOf(lesson);
+    if (told !== key || !step.times) {
+      const mine = ++turn;
+      if (!step.times) app.change({ pose: NO_POSE }); // a hand being placed is placed afresh
+      narrate(lesson, step, () => mine === turn && keyOf(current()) === key);
+    } else if (ended) {
+      ended = false;
+      app.playFrom(lessonRange(lesson, app.score.measures).start);
+    } else app.togglePlaying();
   }
 
   // A step begins: once the plan is there, the workspace is set for the step
@@ -204,6 +240,8 @@ export function mountLearning(app, root = document) {
     const still = () => mine === turn && keyOf(current()) === key;
     voice.stop();
     panel.caption.textContent = "";
+    told = null;
+    ended = false;
     const { plan } = planning(lesson);
     const steps = (await plan).steps;
     if (!still()) return;
@@ -221,6 +259,7 @@ export function mountLearning(app, root = document) {
     const lesson = current();
     if (!lesson) return;
     const { start } = lessonRange(lesson, app.score.measures);
+    ended = false;
     if (stepNow(lesson)?.times) app.playFrom(start);
     else app.change({ time: start, playing: false });
   }
@@ -239,8 +278,10 @@ export function mountLearning(app, root = document) {
     panel.progress.textContent = step ? describeProgress(step, tempos) : "Writing your lesson…";
     panel.next.textContent = step ? describeNext(step, tempos) : "…";
     panel.next.disabled = !step;
-    panel.play.textContent = state.playing ? "⏸ Pause" : "▶ Play";
-    panel.play.title = state.playing ? "Pause the passage" : step?.times === Infinity ? "Play the passage on a loop" : "Play the passage";
+    const going = state.playing || voice.speaking;
+    panel.play.textContent = going ? "⏸ Pause" : "▶ Play";
+    panel.play.title = going ? "Pause the lesson: the voice and the music" : "Carry on with the lesson from here";
+    panel.play.disabled = !step;
   }
 
   // Lays the workspace's lesson on the screen. When a step begins, the
@@ -290,6 +331,7 @@ export function mountLearning(app, root = document) {
   app.addEventListener("played", () => {
     const step = stepNow();
     if (!step) return;
+    ended = true;
     if (step.auto) gotIt();
     else if (step.after) voice.say(step.after);
   });
@@ -328,7 +370,7 @@ export function mountLearning(app, root = document) {
   pick.cancel.addEventListener("click", () => showPicking(null));
   panel.next.addEventListener("click", gotIt);
   panel.stop.addEventListener("click", stopLesson);
-  panel.play.addEventListener("click", () => app.togglePlaying());
+  panel.play.addEventListener("click", pauseOrPlay);
   panel.restart.addEventListener("click", restart);
   panel.again.addEventListener("click", () => {
     const lesson = current();
