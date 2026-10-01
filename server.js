@@ -5,10 +5,12 @@
 // DATA_DIR, each a JSON file with a folder of its own scores beside it. A new
 // workspace starts with a copy of the scores listed in scores/starter.json.
 // See agent.md for the API.
+import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyHandMoves } from "./corrections.js";
@@ -19,6 +21,7 @@ import { cleanState, COMMANDS, mergeState, projectScreen } from "./workspace-mod
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY = 8 * 1024 * 1024;
 const MAX_SPEECH = 1500; // characters the voice will read in one go
+const MAX_COMPOSE = 40000; // characters of instructions the writer will take
 const WORKSPACE_ID = /^ws-[a-z0-9]{10}$/;
 const SCORE_ID = /^[0-9a-f]{64}$/;
 const TYPES = {
@@ -295,23 +298,109 @@ const bearer = (request, url) => request.headers.authorization?.replace(/^Bearer
 
 // The voice that reads lessons aloud: ElevenLabs, with the key kept here so
 // the page never sees it. Answers the MP3 for a text, or null if there is no key.
-export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM", model = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5" } = {}) {
+// The model is Eleven v4, which takes directions for the delivery in square
+// brackets inside the text ("[warmly] Thumb on A.").
+export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM", model = process.env.ELEVENLABS_MODEL_ID || "eleven_v4", concurrency = Number(process.env.ELEVENLABS_CONCURRENCY) || 2, request = fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   if (!key) return null;
-  return async (text) => {
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_64`, {
-      method: "POST",
-      headers: { "xi-api-key": key, "content-type": "application/json", accept: "audio/mpeg" },
-      body: JSON.stringify({ text, model_id: model }),
-    });
-    if (!response.ok) throw new Error(`the voice answered ${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
+  const read = async (text) => {
+    // A plan allows only so many readings at once; one refused for that is asked for again shortly.
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await request(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_64`, {
+        method: "POST",
+        headers: { "xi-api-key": key, "content-type": "application/json", accept: "audio/mpeg" },
+        body: JSON.stringify({ text, model_id: model }),
+      });
+      if (response.ok) return Buffer.from(await response.arrayBuffer());
+      if (response.status !== 429 || attempt >= 5) throw new Error(`the voice answered ${response.status}`);
+      await wait(400 * (attempt + 1));
+    }
   };
+  // Lines are read a few at a time, in the order they were asked for: a
+  // lesson asks for a whole phase at once, and speaks it a line at a time.
+  let reading = 0;
+  const waiting = [];
+  const next = () => {
+    while (reading < concurrency && waiting.length) {
+      const { text, resolve, reject } = waiting.shift();
+      reading += 1;
+      read(text)
+        .then(resolve, reject)
+        .finally(() => {
+          reading -= 1;
+          next();
+        });
+    }
+  };
+  const speak = (text) =>
+    new Promise((resolve, reject) => {
+      waiting.push({ text, resolve, reject });
+      next();
+    });
+  speak.label = `${voice}/${model}`; // what a kept recording is a recording of
+  return speak;
 }
 
-export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = `${process.env.ELEVENLABS_VOICE_ID ?? ""}/${process.env.ELEVENLABS_MODEL_ID ?? ""}` } = {}) {
+// The writer: text composed to order by Claude, through the `claude` command
+// on this machine (`claude -p`), with no tools and none of the machine's own
+// settings. It is given instructions, a request and the shape the answer must
+// take, and answers that shape. Only there when the server is started with
+// MUSICHANDS_WRITER=claude: a public site has no business running it.
+export function claudeWriter({ enabled = process.env.MUSICHANDS_WRITER === "claude", model = process.env.MUSICHANDS_WRITER_MODEL || "sonnet", effort = process.env.MUSICHANDS_WRITER_EFFORT || "low", command = "claude", timeout = 180000 } = {}) {
+  if (!enabled) return null;
+  const compose = ({ system, prompt, schema }) =>
+    new Promise((resolve, reject) => {
+      const args = ["-p", "--model", model, "--effort", effort, "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "json", "--system-prompt", system, "--json-schema", JSON.stringify(schema)];
+      const child = spawn(command, args, { cwd: os.tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
+      let out = "";
+      let err = "";
+      const timer = setTimeout(() => child.kill(), timeout);
+      child.stdout.on("data", (chunk) => (out += chunk));
+      child.stderr.on("data", (chunk) => (err += chunk));
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        reject(new Error(`the writer could not be started: ${error.message}`));
+      });
+      child.on("close", () => {
+        clearTimeout(timer);
+        try {
+          const answer = JSON.parse(out);
+          if (answer.is_error || !answer.structured_output) throw new Error(String(answer.result ?? "no answer").slice(0, 200));
+          resolve(answer.structured_output);
+        } catch (error) {
+          reject(new Error(`the writer gave nothing usable: ${error.message}${err ? ` (${err.trim().slice(0, 200)})` : ""}`));
+        }
+      });
+      child.stdin.end(prompt);
+    });
+  compose.label = `claude/${model}/${effort}`;
+  return compose;
+}
+
+export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", compose = claudeWriter() } = {}) {
   const workspaces = new Workspaces(dataDir, root);
   // Each line the voice has read is kept under its hash, so a repeat costs
   // nothing. Another voice reads everything afresh.
+  // What the writer has composed is kept the same way, under the hash of what
+  // it was asked; the same request made twice at once is one piece of work.
+  const composing = new Map();
+  const composed = async (request) => {
+    const key = createHash("sha256").update(`${compose.label ?? ""}\n${JSON.stringify(request)}`, "utf8").digest("hex");
+    const file = path.join(dataDir, "compose", `${key}.json`);
+    const kept = await readFile(file, "utf8").then(JSON.parse).catch(() => null);
+    if (kept) return kept;
+    if (!composing.has(key)) {
+      composing.set(
+        key,
+        compose(request)
+          .then(async (output) => {
+            await writeAtomic(file, JSON.stringify(output));
+            return output;
+          })
+          .finally(() => composing.delete(key)),
+      );
+    }
+    return composing.get(key);
+  };
   const speechFile = (text) => path.join(dataDir, "speech", `${createHash("sha256").update(`${voiceName}\n${text}`, "utf8").digest("hex")}.mp3`);
 
   // The MusicXML of the score a workspace has open.
@@ -352,7 +441,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(201, { ...connection(record), version: record.version, state: record.state, scores: record.scores });
     }
 
-    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
+    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|compose|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
     if (!match) return json(404, { error: "Not found" });
     const record = await workspaces.get(match[1]);
     if (!record) return json(404, { error: "No such workspace" });
@@ -457,6 +546,24 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       }
       response.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "private, max-age=86400" });
       return response.end(audio);
+    }
+    if (part === "/compose" && request.method === "POST") {
+      if (!compose) return json(503, { error: "This site has no writer: start the server with MUSICHANDS_WRITER=claude" });
+      let body;
+      try {
+        body = JSON.parse((await readBody(request)).toString("utf8"));
+      } catch {
+        return json(400, { error: "The body must be JSON" });
+      }
+      const system = String(body?.system ?? "");
+      const prompt = String(body?.prompt ?? "");
+      if (!prompt.trim() || !body?.schema || typeof body.schema !== "object") return json(400, { error: "Say what to write and in what shape: { system, prompt, schema }" });
+      if (system.length + prompt.length > MAX_COMPOSE) return json(400, { error: "That is too much to ask the writer at once" });
+      try {
+        return json(200, { output: await composed({ system, prompt, schema: body.schema }) });
+      } catch (error) {
+        return json(502, { error: error.message });
+      }
     }
     if (part === "/commands" && request.method === "POST") {
       let body;

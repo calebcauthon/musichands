@@ -1344,6 +1344,7 @@ window.addEventListener("hashchange", () => {
 //     playMoment(time)    shows and sounds one moment of the piece
 //   The page
 //     speech(text)        that text read aloud, as a Blob; null if the site has no voice
+//     compose(request)    something written to order: { system, prompt, schema } → an object of that shape; null if the site has no writer
 //     tint(range)         tints measures { from, to, strong } in the notation; null to stop
 //     onMeasure(hook)     takes measure clicks and hovers: { click(index) → true if taken, hover(index) }; null to give them back
 //     onKey(handler)      is offered each shortcut key first: handler(event, { onControl }) → true if taken
@@ -1368,6 +1369,14 @@ const app = Object.assign(new EventTarget(), {
     if (response.status === 503) return null;
     if (!response.ok) throw new Error(`the voice answered ${response.status}`);
     return response.blob();
+  },
+  async compose(request) {
+    if (!ws) return null;
+    const response = await fetch(`${ws.base}/api${ws.path}/compose`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${ws.token}` }, body: JSON.stringify(request) });
+    if (response.status === 503) return null;
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? `the writer answered ${response.status}`);
+    return body.output ?? null;
   },
   tint(range) {
     page.tint = range;
@@ -1394,7 +1403,5 @@ Object.defineProperties(app, {
     },
   },
 });
-mountLearning(app);
-
-window.musichands = { page, app, view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
+window.musichands = { page, app, learning: mountLearning(app), view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
 await openFirstWorkspace();

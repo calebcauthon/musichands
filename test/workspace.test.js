@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { applyHandMoves, countCorrections, matchingMoments, withCorrection } from "../corrections.js";
 import { assignFingering } from "../fingering.js";
-import { createAppServer } from "../server.js";
+import { createAppServer, elevenLabsVoice } from "../server.js";
 import { parseConnection, workspaceFromHash } from "../workspace-client.js";
 import { cleanPassage, cleanPose, cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
 
@@ -383,4 +383,75 @@ test("Play can be kept to a stretch of measures, a set number of times or over a
   assert.deepEqual(state.passage, { from: 2, to: 3, times: null }, "a null count is over and over");
   state = mergeState(state, { passage: null });
   assert.equal(state.passage, null);
+});
+
+test("the writer composes to order, keeps what it wrote, and is not there unless asked for", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "musichands-"));
+  const asked = [];
+  const compose = async (request) => {
+    asked.push(request);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return { lines: [`written for: ${request.prompt}`] };
+  };
+  compose.label = "test";
+  const server = createAppServer(undefined, { dataDir, compose, speak: null });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const base = `http://localhost:${server.address().port}`;
+  try {
+    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const headers = { authorization: `Bearer ${made.token}`, "content-type": "application/json" };
+    const ask = (body, with_ = headers) => fetch(`${base}/api/workspaces/${made.id}/compose`, { method: "POST", headers: with_, body: JSON.stringify(body) });
+    const request = { system: "You write lessons.", prompt: "measures 1 to 4", schema: { type: "object" } };
+    assert.equal((await ask(request, { "content-type": "application/json" })).status, 401);
+    const [first, second] = await Promise.all([ask(request), ask(request)]);
+    assert.deepEqual((await first.json()).output, { lines: ["written for: measures 1 to 4"] });
+    assert.deepEqual((await second.json()).output, { lines: ["written for: measures 1 to 4"] });
+    assert.equal((await ask(request)).status, 200);
+    assert.equal(asked.length, 1, "the same request, at once or later, is written once");
+    assert.equal((await ask({ ...request, prompt: "measures 5 to 8" })).status, 200);
+    assert.equal(asked.length, 2);
+    assert.equal((await ask({ system: "x", prompt: "", schema: {} })).status, 400);
+    assert.equal((await ask({ system: "x", prompt: "y" })).status, 400, "the shape of the answer must be given");
+    assert.equal((await ask({ ...request, prompt: "z".repeat(50000) })).status, 400);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dataDir, { recursive: true, force: true });
+  }
+  const bare = await mkdtemp(path.join(os.tmpdir(), "musichands-"));
+  const without = createAppServer(undefined, { dataDir: bare, compose: null, speak: null });
+  await new Promise((resolve) => without.listen(0, resolve));
+  try {
+    const at = `http://localhost:${without.address().port}`;
+    const made = await (await fetch(`${at}/api/workspaces`, { method: "POST", body: "{}" })).json();
+    const answer = await fetch(`${at}/api/workspaces/${made.id}/compose`, { method: "POST", headers: { authorization: `Bearer ${made.token}` }, body: JSON.stringify({ prompt: "x", schema: {} }) });
+    assert.equal(answer.status, 503);
+  } finally {
+    await new Promise((resolve) => without.close(resolve));
+    await rm(bare, { recursive: true, force: true });
+  }
+});
+
+test("the voice reads only a few lines at once, in order, and asks again when refused for being busy", async () => {
+  let busy = 0;
+  let most = 0;
+  const started = [];
+  let refusals = 2;
+  const request = async (url, options) => {
+    const { text, model_id } = JSON.parse(options.body);
+    if (text === "three" && refusals-- > 0) return { ok: false, status: 429 };
+    started.push(text);
+    busy += 1;
+    most = Math.max(most, busy);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    busy -= 1;
+    return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(`${model_id}:${text}`).buffer };
+  };
+  const speak = elevenLabsVoice({ key: "k", voice: "v", request, wait: async () => {} });
+  assert.equal(speak.label, "v/eleven_v4", "the voice is Eleven v4 unless told otherwise");
+  const read = await Promise.all(["one", "two", "three", "four", "five"].map((text) => speak(text)));
+  assert.deepEqual(read.map((audio) => audio.toString()), ["eleven_v4:one", "eleven_v4:two", "eleven_v4:three", "eleven_v4:four", "eleven_v4:five"]);
+  assert.equal(most, 2, "two at a time");
+  assert.deepEqual(started.slice(0, 2), ["one", "two"], "in the order asked");
+  assert.equal(elevenLabsVoice({ key: "" }), null, "no key, no voice");
+  await assert.rejects(elevenLabsVoice({ key: "k", request: async () => ({ ok: false, status: 401 }) })("x"), /answered 401/);
 });

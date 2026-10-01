@@ -8,7 +8,8 @@ const source = (name) => readFile(new URL(`../${name}`, import.meta.url), "utf8"
 const imports = (text) => [...text.matchAll(/^import .* from "(.+)";$/gm), ...text.matchAll(/^export .* from "(.+)";$/gm)].map((match) => match[1]);
 
 test("learning uses only its own files, the passage arithmetic and the app it is handed", async () => {
-  assert.deepEqual(imports(await source("learning.js")).sort(), ["./lesson.js", "./speech.js"]);
+  assert.deepEqual(imports(await source("learning.js")).sort(), ["./lesson-writer.js", "./lesson.js", "./speech.js"]);
+  assert.deepEqual(imports(await source("lesson-writer.js")), ["./lesson.js"]);
   assert.deepEqual(imports(await source("lesson.js")), ["./passage.js"]);
   assert.deepEqual(imports(await source("speech.js")), []);
   const learning = (await source("learning.js")).replace(/\/\/.*$/gm, ""); // the code, without its comments

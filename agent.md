@@ -214,36 +214,44 @@ workspace: `lesson`, which the server stores as given and never reads. As
 the module is now, a lesson is
 
 ```json
-{ "from": 2, "to": 5, "stage": "right", "phase": "intro", "score": "<score id>" }
+{ "from": 2, "to": 5, "step": 0, "score": "<score id>" }
 ```
 
-`from` and `to` are measure indexes from 0; `stage` is `right`, `left` or
-`both`; `phase` is `intro` (the whole passage, both hands, once, at nine
-tenths of the score's tempo, after which the page moves on by itself),
-`position` (the voice places the hand a finger at a time, writing `pose`),
-`show` (the notes named, the hand playing each, then the passage played twice
-to watch), `once` (the passage once, slowly, for the person to play along) or
-`ramp` (the passage looping, three beats a minute faster at each "got it"
-until the score's own tempo). The shape may change with the module; treat it
-as the module's, not as an API.
+`from` and `to` are measure indexes from 0, and `step` is how far through
+its plan the lesson is. The plan is a list of steps the page works out for
+the passage (written to order where the site has a writer, else ready-made):
+each has the hands it is about, lines to say, what plays after them and
+whether it waits for "got it". The plan is not in the workspace; the shape of
+`lesson` may change with the module, so treat it as the module's, not as an
+API.
 
-At each phase the module sets `passage` to the lesson's measures and how many
-times the phase plays them, `hands` to the hand being learnt, `time` to the
+At each step the module sets `passage` to the lesson's measures and how many
+times the step plays them, `hands` to the hands it is about, `time` to the
 start of the passage and `tempo` to the practice tempo, so you can read where
 a lesson stands from those. To start a lesson from outside, write what the
 page writes:
 
 ```json
-{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "intro", "score": "<score id>" }, "passage": { "from": 2, "to": 5, "times": 1 }, "time": 8, "tempo": 108, "hands": { "left": { "show": true, "sound": true }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+{ "lesson": { "from": 2, "to": 5, "step": 0, "score": "<score id>" }, "passage": { "from": 2, "to": 5, "times": 1 }, "time": 8, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
 ```
 
-The lead browser talks each phase through and, in a phase that plays, starts
-playing. Send `"lesson": null, "passage": null` to stop. A lesson on a piece
-that is no longer the one open is dropped by the page.
+The lead browser sets each step up, talks it through and, where the step
+plays, starts playing. Raise `step` to move on; send `"lesson": null,
+"passage": null` to stop. A lesson on a piece that is no longer the one open
+is dropped by the page, and so is one found when the page is opened.
 
 `POST /api/workspaces/<id>/speech` with `{ "text": "…" }` answers that text
 read aloud as MP3, from the voice the site is set up with (up to 1500
-characters; `503` when the site has no voice). The page uses it for lessons.
+characters; `503` when the site has no voice). The voice is ElevenLabs'
+Eleven v4, so the text may carry directions for the delivery in square
+brackets: `"[gently] Thumb on A."`. The page uses it for lessons.
+
+`POST /api/workspaces/<id>/compose` with `{ "system": "…", "prompt": "…",
+"schema": { …JSON Schema… } }` answers `{ "output": … }`: something written
+to order in that shape, by the writer the site is set up with (`503` when it
+has none, which is the case on the public site). The same request is written
+once and kept. The page uses it to have a lesson's words written for the
+passage.
 
 ## Changing the workspace
 
