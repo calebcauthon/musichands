@@ -33,6 +33,7 @@ export function mountLearning(app, root = document) {
   let picking = null; // choosing the measures: { from, to, anchor }; anchor is the end clicked first, while the other is awaited
   let seen; // the lesson, by key, last laid on the screen
   let scoreSeen = null; // the piece that was open then
+  let opening = true; // the workspace has only just been opened: nothing has been laid on the screen yet
 
   // The panel shows what has been said in the phase so far, a line at a time.
   const voice = new Narrator({
@@ -117,10 +118,13 @@ export function mountLearning(app, root = document) {
     app.change({ ...standing(lesson), tempo: introTempo(app.scoreTempo), camera: { ...app.state.camera, view: { ...OVERHEAD }, autoCut: false } });
   }
 
+  // The workspace as it is with no lesson on: the whole piece, both hands, at its own tempo.
+  const NO_LESSON = { lesson: null, passage: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE };
+
   function stopLesson() {
     if (!app.state?.lesson) return;
     voice.stop();
-    app.change({ lesson: null, passage: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE });
+    app.change(NO_LESSON);
   }
 
   // "Got it": the next phase, or a little faster, or the next hand, or done.
@@ -168,6 +172,17 @@ export function mountLearning(app, root = document) {
   // browser that began it (or the one that plays the music, when an agent
   // did) talks it through.
   function show({ state, local, own, lead }) {
+    // A lesson is begun by someone, never by opening the page: one left in
+    // the workspace from before is ended, quietly, and the piece put back.
+    if (opening) {
+      opening = false;
+      if (state.lesson) {
+        seen = null;
+        scoreSeen = state.score?.id ?? null;
+        app.change(NO_LESSON);
+        return;
+      }
+    }
     // Another piece has been opened: choosing stops, and a lesson on the old piece is over.
     const scoreId = state.score?.id ?? null;
     if (scoreId !== scoreSeen) {
@@ -215,6 +230,7 @@ export function mountLearning(app, root = document) {
     voice.stop();
     seen = undefined;
     scoreSeen = null;
+    opening = true;
     if (picking) showPicking(null);
   });
 
