@@ -92,7 +92,7 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `corrections.fingers` | `{ "<moment>": { "<hand>": { "<note>": <finger 1–5> } } }`. Overrides the score's and the app's fingering at that moment. See "Corrections". |
 | `corrections.hands` | `{ "<moment>": { "<note>": "left" \| "right" } }`. Gives a note to the other hand at that moment. |
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
-| `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`. Measure indexes count from 0. See "Playing a passage". |
+| `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`, with optional `"start"` and `"end"` (quarter notes from the beginning of the piece) to keep it to part of those measures. Measure indexes count from 0. See "Playing a passage". |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
 | `lesson` | The learning module's own record of the lesson under way, or `null`. The workspace stores it as given and does not read it; the page's learning module does. See "Lessons". |
 
@@ -184,7 +184,9 @@ Each go starts on the beat the last one ended on. After the last, `playing`
 goes false; with `"times": null` it loops until stopped. The measures are
 tinted in the notation. While `passage` is set, Play plays it again; send
 `"passage": null` to give Play the whole piece back. `hands` chooses which
-hand is seen and heard, as always. A lesson works through this same field.
+hand is seen and heard, as always. Add `"end": 18` (or `"start"`) to play
+only part of the measures: up to beat 18 of the piece, say. Send `"end":
+null` to have the whole of them again. A lesson works through this same field.
 
 ## Posing a hand
 
@@ -214,14 +216,15 @@ workspace: `lesson`, which the server stores as given and never reads. As
 the module is now, a lesson is
 
 ```json
-{ "from": 2, "to": 5, "step": 0, "score": "<score id>" }
+{ "from": 2, "to": 5, "part": 0, "step": 0, "score": "<score id>" }
 ```
 
-`from` and `to` are measure indexes from 0, and `step` is how far through
-its plan the lesson is. The plan is a list of steps the page works out for
+`from` and `to` are measure indexes from 0; `part` and `step` are how far
+through its plan the lesson is. The plan comes in parts (an opening, each
+hand that plays, both hands), each a list of steps the page works out for
 the passage (written to order where the site has a writer, else ready-made):
-each has the hands it is about, lines to say, what plays after them and
-whether it waits for "got it". The plan is not in the workspace; the shape of
+a step has the hands it is about, lines to say, what plays after them (the
+passage, or the first part of it) and whether it waits for "got it". The plan is not in the workspace; the shape of
 `lesson` may change with the module, so treat it as the module's, not as an
 API.
 
@@ -232,11 +235,11 @@ a lesson stands from those. To start a lesson from outside, write what the
 page writes:
 
 ```json
-{ "lesson": { "from": 2, "to": 5, "step": 0, "score": "<score id>" }, "passage": { "from": 2, "to": 5, "times": 1 }, "time": 8, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+{ "lesson": { "from": 2, "to": 5, "part": 0, "step": 0, "score": "<score id>" }, "passage": { "from": 2, "to": 5, "times": 1 }, "time": 8, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
 ```
 
 The lead browser sets each step up, talks it through and, where the step
-plays, starts playing. Raise `step` to move on; send `"lesson": null,
+plays, starts playing. Raise `step` (or `part`, with `step` back at 0) to move on; send `"lesson": null,
 "passage": null` to stop. A lesson on a piece that is no longer the one open
 is dropped by the page, and so is one found when the page is opened.
 

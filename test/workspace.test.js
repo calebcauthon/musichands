@@ -377,10 +377,16 @@ test("Play can be kept to a stretch of measures, a set number of times or over a
   assert.deepEqual(cleanPassage({ from: 4 }), { from: 4, to: 4, times: null }, "one measure, over and over");
   assert.equal(cleanPassage({ from: 5, to: 4 }), null);
   assert.deepEqual(cleanPassage({ from: 0, to: 1, times: 0 }), { from: 0, to: 1, times: null });
+  assert.deepEqual(cleanPassage({ from: 4, to: 5, times: 1, end: 18.5 }), { from: 4, to: 5, times: 1, end: 18.5 }, "it can stop part way through its measures");
+  assert.deepEqual(cleanPassage({ from: 4, to: 5, times: 1, start: 17, end: 16 }), { from: 4, to: 5, times: 1, start: 17 }, "but not before it starts");
   let state = mergeState(defaultState(), { passage: { from: 2, to: 3, times: 2 } });
   assert.deepEqual(state.passage, { from: 2, to: 3, times: 2 });
   state = mergeState(state, { passage: { times: null } });
   assert.deepEqual(state.passage, { from: 2, to: 3, times: null }, "a null count is over and over");
+  state = mergeState(state, { passage: { end: 9 } });
+  assert.equal(state.passage.end, 9);
+  state = mergeState(state, { passage: { end: null } });
+  assert.equal("end" in state.passage, false, "a null end is the whole of the measures again");
   state = mergeState(state, { passage: null });
   assert.equal(state.passage, null);
 });

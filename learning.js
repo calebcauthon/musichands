@@ -3,21 +3,22 @@
 // page: it reads the music and the workspace through it, and does everything
 // it does by changing the workspace's public fields — tempo, hands, time,
 // camera, pose, passage, playing — as an agent could. A lesson is a plan of
-// steps (lesson.js): where the site has a writer, the plan is designed and
-// written for the passage (lesson-writer.js); otherwise it is the ready-made
-// one. This file is the Learn button, choosing the measures, the lesson
-// panel, the voice, and going through the plan a step at a time.
+// steps, in parts (lesson.js): where the site has a writer, each hand's part
+// is designed and written for the passage (lesson-writer.js) while the
+// opening plays; otherwise it is the ready-made one. This file is the Learn
+// button, choosing the measures, the lesson panel, the voice, and going
+// through the plan a step at a time.
 //
 // The lesson under way is kept in the workspace as `lesson`. The workspace
 // stores it as given and never reads it, so the shape of a lesson can change
 // here without touching the page or the server.
-import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describeProgress, lessonPassage, lessonRange, OVERHEAD, readyMadePlan, stageHands } from "./lesson.js";
+import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describeProgress, lessonParts, lessonPassage, lessonRange, OVERHEAD, readyMadeSteps, stageHands } from "./lesson.js";
 import { lessonBrief, planFromScript, shownText, writerRequest } from "./lesson-writer.js";
 import { Narrator } from "./speech.js";
 
 const NO_POSE = { left: null, right: null };
-const WRITER_WAIT = 60000; // ms a lesson waits to be written before the ready-made one steps in
-const keyOf = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.step}` : null);
+const WRITER_WAIT = 75000; // ms a part of a lesson waits to be written before the ready-made one steps in
+const keyOf = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.part}.${lesson.step}` : null);
 
 export function mountLearning(app, root = document) {
   const learnButton = root.querySelector("#learn");
@@ -42,7 +43,8 @@ export function mountLearning(app, root = document) {
   let turn = 0; // which narration is the one going on; a later one, or a stop, overtakes it
   let told = null; // the step, by key, whose lines have been said right through
   let ended = false; // what the step plays has played out, so Play starts it from the top
-  let planned = null; // the plan for the passage being learnt: { key, plan (a promise), ready (the plan, once it is there) }
+  const reminded = new Set(); // what has been said after a step played out, so the same reminder is not said at every step
+  let planned = null; // the plan for the passage being learnt: { key, names, parts (promises of steps), ready (the steps of each part, once there), closing }
 
   // The panel shows what has been said in the phase so far, a line at a
   // time, without the directions written into a line for the voice.
@@ -67,31 +69,42 @@ export function mountLearning(app, root = document) {
     return lesson && app.score && (!lesson.score || lesson.score === state.score?.id) ? lesson : null;
   }
 
-  // The plan for a lesson's passage, asked for once: designed and written
-  // for the passage where the site has a writer, else (or if that fails, or
-  // takes too long) the ready-made one. Always comes to a plan.
+  // The plan for a lesson's passage, asked for once. It comes in parts: the
+  // opening is ready-made, so a lesson starts at once; each hand's part, and
+  // both hands', is designed and written for the passage where the site has
+  // a writer, all of them at once, and is the ready-made one otherwise (or
+  // if the writing fails, or takes too long). Every part comes to its steps.
   function planning(lesson) {
     const music = { score: app.score, positions: app.positions, events: app.events, target: app.scoreTempo };
     const brief = lessonBrief(lesson, music);
     const key = JSON.stringify([app.state?.score?.id, lesson.from, lesson.to, brief.hands, brief.tempo]);
     if (planned?.key !== key) {
-      const mine = { key, ready: null };
-      const written = app
-        .compose(writerRequest(brief))
-        .then((script) => planFromScript(script, brief))
-        .catch((error) => {
-          console.warn("MusicHands: the lesson could not be written.", error);
-          return null;
+      const names = lessonParts(lesson, music);
+      const mine = { key, names, ready: names.map(() => null), closing: "" };
+      mine.parts = names.map((name, index) => {
+        const readyMade = () => readyMadeSteps(name, lesson, music);
+        if (name === "intro") return Promise.resolve((mine.ready[index] = readyMade()));
+        const last = index === names.length - 1;
+        const written = app
+          .compose(writerRequest(brief, name, { before: names[index - 1] ?? null, last }))
+          .then((script) => planFromScript(script, brief))
+          .catch((error) => {
+            console.warn(`MusicHands: the ${name} part of the lesson could not be written.`, error);
+            return null;
+          });
+        return Promise.race([written, new Promise((resolve) => setTimeout(() => resolve(null), WRITER_WAIT))]).then((part) => {
+          if (last && part?.closing) mine.closing = part.closing;
+          return (mine.ready[index] = part?.steps ?? readyMade());
         });
-      mine.plan = Promise.race([written, new Promise((resolve) => setTimeout(() => resolve(null), WRITER_WAIT))]).then((plan) => (mine.ready = plan ?? readyMadePlan(lesson, music)));
+      });
       planned = mine;
     }
     return planned;
   }
 
-  // The step the lesson is at, if its plan is there yet.
+  // The step the lesson is at, if that part of its plan is there yet.
   function stepNow(lesson = current()) {
-    return (lesson && planning(lesson).ready?.steps[lesson.step]) || null;
+    return (lesson && planning(lesson).ready[lesson.part]?.[lesson.step]) || null;
   }
 
   // -------------------------------------------------------------------------
@@ -148,7 +161,8 @@ export function mountLearning(app, root = document) {
   // change comes back through show().
   function startLesson(from, to) {
     if (!app.score || !app.state) return;
-    const lesson = { from: Math.min(from, to), to: Math.max(from, to), step: 0, score: app.state.score?.id ?? "" };
+    const lesson = { from: Math.min(from, to), to: Math.max(from, to), part: 0, step: 0, score: app.state.score?.id ?? "" };
+    reminded.clear();
     const passage = { from: lesson.from, to: lesson.to, times: 1 };
     app.change({ lesson, passage, time: lessonRange(lesson, app.score.measures).start, playing: false, pose: NO_POSE, hands: stageHands("both"), camera: { ...app.state.camera, view: { ...OVERHEAD }, autoCut: false } });
   }
@@ -163,25 +177,27 @@ export function mountLearning(app, root = document) {
     app.change(NO_LESSON);
   }
 
+  // The lesson is over: the piece is put back, and the last word said.
+  function finish(plan) {
+    turn += 1;
+    app.change(NO_LESSON);
+    sayAfresh(plan.closing || describeAdvance("done", { target: app.scoreTempo }));
+  }
+
   // "Got it": in a climb, a little faster; otherwise the next step, or done.
   function gotIt() {
     const lesson = current();
-    const plan = lesson && planning(lesson).ready;
-    if (!plan) return; // still being written
+    const plan = lesson && planning(lesson);
+    const steps = plan?.ready[lesson.part];
+    if (!steps) return; // still being written
     const target = app.scoreTempo;
-    const next = advanceLesson(lesson, plan, app.tempo, target);
-    if (next.event === "step") {
-      app.change({ lesson: next.lesson, playing: false }); // set up and talked through by enterStep()
-      return;
+    const next = advanceLesson(lesson, steps, plan.names.length, app.tempo, target);
+    if (next.event === "step") app.change({ lesson: next.lesson, playing: false }); // set up and talked through by enterStep()
+    else if (next.event === "done") finish(plan);
+    else {
+      app.change({ tempo: next.tempo }); // the music, if playing, follows the new tempo where it is
+      sayAfresh(describeAdvance(next.event, { tempo: next.tempo, target }));
     }
-    if (next.event === "done") {
-      turn += 1;
-      app.change(NO_LESSON);
-      sayAfresh(plan.closing || describeAdvance("done", { target }));
-      return;
-    }
-    app.change({ tempo: next.tempo }); // the music, if playing, follows the new tempo where it is
-    sayAfresh(describeAdvance(next.event, { tempo: next.tempo, target }));
   }
 
   // Says a step's lines, then plays the passage if the step plays it. A line
@@ -242,12 +258,19 @@ export function mountLearning(app, root = document) {
     panel.caption.textContent = "";
     told = null;
     ended = false;
-    const { plan } = planning(lesson);
-    const steps = (await plan).steps;
+    const plan = planning(lesson);
+    // Only said to be writing if it is taking a moment.
+    const waiting = setTimeout(() => still() && (panel.caption.textContent = "Writing the next part…"), 600);
+    const steps = (await plan.parts[lesson.part]) ?? [];
+    clearTimeout(waiting);
     if (!still()) return;
+    panel.caption.textContent = "";
     const step = steps[lesson.step];
     if (!step) {
-      stopLesson(); // past the end of the plan, or a plan with nothing in it
+      // Nothing here (a part with no steps, or a place past its end): on to the next part, or done.
+      if (lesson.part + 1 < plan.names.length) app.change({ lesson: { ...lesson, part: lesson.part + 1, step: 0 } });
+      else if (plan.names.length) finish(plan);
+      else stopLesson(); // nothing in the passage to learn
       return;
     }
     app.change({ passage: lessonPassage(lesson, step), hands: stageHands(step.hands), tempo: step.tempo, time: lessonRange(lesson, app.score.measures).start, playing: false, pose: NO_POSE });
@@ -310,8 +333,8 @@ export function mountLearning(app, root = document) {
 
     const lesson = current(state);
     paint(state);
-    // The plan may still be on its way: the panel is filled in when it lands.
-    if (lesson && !stepNow(lesson)) planning(lesson).plan.then(() => paint());
+    // That part of the plan may still be on its way: the panel is filled in when it lands.
+    if (lesson && !stepNow(lesson)) planning(lesson).parts[lesson.part]?.then(() => paint());
     const key = keyOf(lesson);
     if (key === seen) return;
     const wasOn = Boolean(seen);
@@ -333,7 +356,10 @@ export function mountLearning(app, root = document) {
     if (!step) return;
     ended = true;
     if (step.auto) gotIt();
-    else if (step.after) voice.say(step.after);
+    else if (step.after && !reminded.has(step.after)) {
+      reminded.add(step.after);
+      voice.say(step.after);
+    }
   });
   app.addEventListener("reset", () => {
     turn += 1;

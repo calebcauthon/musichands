@@ -7,8 +7,12 @@
 // the whole passage heard, then each hand that plays — placed a finger at a
 // time, its notes shown, played once along, looped up to tempo — then both.
 //
-// The lesson under way is kept in the workspace as { from, to, step }: the
-// measures and how far through the plan it is. The page (learning.js) runs
+// A plan comes in parts, so that the first can be gone through while the
+// rest are still being written: the opening, each hand that plays, and both
+// hands together.
+//
+// The lesson under way is kept in the workspace as { from, to, part, step }:
+// the measures, and how far through the plan it is. The page (learning.js) runs
 // it, keeps the camera straight over the hands, and says what to do.
 import { passageRange, passageSteps } from "./passage.js";
 
@@ -28,7 +32,7 @@ const clamp = (value, [low, high]) => Math.min(high, Math.max(low, value));
 // The lesson to offer from a measure: that one and the few after it.
 export function defaultLesson(measureIndex, measureCount) {
   const from = clamp(Math.floor(measureIndex), [0, Math.max(0, measureCount - 1)]);
-  return { from, to: Math.min(from + LESSON_MEASURES - 1, Math.max(0, measureCount - 1)), step: 0 };
+  return { from, to: Math.min(from + LESSON_MEASURES - 1, Math.max(0, measureCount - 1)), part: 0, step: 0 };
 }
 
 // A lesson as the workspace holds it, made sound, or null for none. The
@@ -39,11 +43,12 @@ export function cleanLesson(value) {
   const from = Number(value.from);
   const to = Number(value.to);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) return null;
-  const step = Number(value.step);
+  const place = (given) => (Number.isInteger(Number(given)) && Number(given) >= 0 ? Number(given) : 0);
   return {
     from,
     to,
-    step: Number.isInteger(step) && step >= 0 ? step : 0,
+    part: place(value.part),
+    step: place(value.step),
     ...(typeof value.score === "string" ? { score: value.score } : {}), // the piece it is a lesson on
   };
 }
@@ -72,29 +77,32 @@ export function stageHands(stage) {
   };
 }
 
-// What pressing "got it" does at a step of a plan: in a climb, a little
-// faster, until the score's tempo; otherwise, or once there, the next step;
-// after the last step, done. Answers the new lesson (null when done), the
-// tempo to practise at, and what just happened.
-export function advanceLesson(lesson, plan, tempo, target) {
-  const step = plan.steps[lesson.step];
+// What pressing "got it" does at a step: in a climb, a little faster, until
+// the score's tempo; otherwise, or once there, the next step of the part,
+// or the first of the next part; after the last, done. `steps` are the
+// steps of the part the lesson is in, `parts` how many parts the plan has.
+// Answers the new lesson (null when done), what just happened, and in a
+// climb the tempo to go to.
+export function advanceLesson(lesson, steps, parts, tempo, target) {
+  const step = steps[lesson.step];
   if (step?.climb && tempo < target) {
     const faster = nextTempo(tempo, target);
     return { lesson, tempo: faster, event: faster >= target ? "target" : "faster" };
   }
-  const next = plan.steps[lesson.step + 1];
-  if (!next) return { lesson: null, tempo: target, event: "done" };
-  return { lesson: { ...lesson, step: lesson.step + 1 }, tempo: next.tempo, event: "step" };
+  if (lesson.step + 1 < steps.length) return { lesson: { ...lesson, step: lesson.step + 1 }, event: "step" };
+  if (lesson.part + 1 < parts) return { lesson: { ...lesson, part: lesson.part + 1, step: 0 }, event: "step" };
+  return { lesson: null, event: "done" };
 }
 
 // Where the lesson's passage sits in the piece and among its steps.
 export { passageRange as lessonRange, passageSteps as lessonSteps };
 
-// The workspace `passage` for a step: the lesson's measures, as many times
-// as the step plays them (once where it plays nothing, so that Play still
-// keeps to the passage).
+// The workspace `passage` for a step: the lesson's measures, or as far into
+// them as the step goes (`end`), as many times as the step plays them (once
+// where it plays nothing, so that Play still keeps to the passage).
 export function lessonPassage(lesson, step) {
-  return { from: lesson.from, to: lesson.to, times: Number.isFinite(step.times) ? Math.max(1, step.times) : null };
+  // A null `end` takes away the one a step before may have left there.
+  return { from: lesson.from, to: lesson.to, times: Number.isFinite(step.times) ? Math.max(1, step.times) : null, start: null, end: Number.isFinite(step.end) ? step.end : null };
 }
 
 // ---------------------------------------------------------------------------
@@ -253,28 +261,34 @@ export function describeAdvance(event, { tempo, target }) {
   return "";
 }
 
-// The ready-made lesson, as a plan: the whole passage heard; then each hand
-// that plays, placed, shown, played along once and looped up to tempo; then
-// both together, if both play.
-export function readyMadePlan(lesson, { score, positions, events, target }) {
+// The parts a lesson on a passage has, in order: an opening ("intro") when
+// there is enough to be worth hearing first, each hand that plays, and both
+// hands together when both play.
+export const OPENING_FROM = 3; // moments in the passage from which it is heard whole first
+export function lessonParts(lesson, { score, events }) {
   const range = passageRange(lesson, score.measures);
-  if (!range) return { steps: [], closing: "" };
-  const plays = (hand) => events.some((event) => event.hand === hand && event.attack && event.time >= range.start - 1e-6 && event.time < range.end - 1e-6);
-  const stages = STAGES.filter((stage) => (stage === "both" ? plays("right") && plays("left") : plays(stage)));
+  if (!range) return [];
+  const played = events.filter((event) => event.attack && event.time >= range.start - 1e-6 && event.time < range.end - 1e-6);
+  const hands = ["right", "left"].filter((hand) => played.some((event) => event.hand === hand));
+  return [...(played.length >= OPENING_FROM ? ["intro"] : []), ...hands, ...(hands.length === 2 ? ["both"] : [])];
+}
+
+// The ready-made steps of a part: the opening is the whole passage heard,
+// nearly full, moving on by itself; a hand (or both) is placed, shown,
+// played along once and looped up to tempo.
+export function readyMadeSteps(part, lesson, { score, positions, events, target }) {
   const slow = slowTempo(target);
-  const said = (stage, phase, tempo) => phaseLines({ ...lesson, stage, phase }, { score, positions, events, tempo, target, first: stage === stages[0] });
-  const name = { right: "Right hand", left: "Left hand", both: "Both hands" };
-  const steps = [{ label: "The whole passage", hands: "both", lines: said(stages[0] ?? "right", "intro", introTempo(target)), times: 1, tempo: introTempo(target), climb: false, auto: true, button: "", after: "" }];
-  for (const stage of stages) {
-    const hand = stage === "both" ? "the hands" : "the hand";
-    steps.push(
-      { label: `${name[stage]} · placing ${hand}`, hands: stage, lines: said(stage, "position", slow), times: 0, tempo: slow, climb: false, auto: false, button: stage === "both" ? "Hands are set" : "Hand is set", after: "" },
-      { label: `${name[stage]} · the notes`, hands: stage, lines: said(stage, "show", slow), times: SHOW_TIMES, tempo: slow, climb: false, auto: false, button: "My turn", after: "Press Got it when you're ready to try it, or Play to watch again." },
-      { label: `${name[stage]} · your turn`, hands: stage, lines: said(stage, "once", slow), times: 1, tempo: slow, climb: false, auto: false, button: "Loop it", after: "Press Got it when you're ready, or Play to go again." },
-      { label: `${name[stage]} · looping`, hands: stage, lines: said(stage, "ramp", slow), times: Infinity, tempo: slow, climb: true, auto: false, button: "Got it", after: "" },
-    );
-  }
-  return { steps, closing: describeAdvance("done", { target }) };
+  const first = lessonParts(lesson, { score, events }).find((name) => name !== "intro");
+  const said = (stage, phase, tempo) => phaseLines({ ...lesson, stage, phase }, { score, positions, events, tempo, target, first: stage === first });
+  if (part === "intro") return [{ label: "The whole passage", hands: "both", lines: said("right", "intro", introTempo(target)), times: 1, tempo: introTempo(target), climb: false, auto: true, button: "", after: "" }];
+  const name = { right: "Right hand", left: "Left hand", both: "Both hands" }[part];
+  const hand = part === "both" ? "the hands" : "the hand";
+  return [
+    { label: `${name} · placing ${hand}`, hands: part, lines: said(part, "position", slow), times: 0, tempo: slow, climb: false, auto: false, button: part === "both" ? "Hands are set" : "Hand is set", after: "" },
+    { label: `${name} · the notes`, hands: part, lines: said(part, "show", slow), times: SHOW_TIMES, tempo: slow, climb: false, auto: false, button: "My turn", after: "Press Got it when you're ready to try it, or Play to watch again." },
+    { label: `${name} · your turn`, hands: part, lines: said(part, "once", slow), times: 1, tempo: slow, climb: false, auto: false, button: "Loop it", after: "Press Got it when you're ready, or Play to go again." },
+    { label: `${name} · looping`, hands: part, lines: said(part, "ramp", slow), times: Infinity, tempo: slow, climb: true, auto: false, button: "Got it", after: "" },
+  ];
 }
 
 // A line for the screen: where the lesson is.

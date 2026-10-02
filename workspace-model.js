@@ -22,7 +22,7 @@ export function defaultState() {
     look: defaultLook(), // the piano, the player and the place, by name (see looks.js)
     corrections: { fingers: {}, hands: {} },
     lesson: null, // the learning module's own record of the lesson under way (learning.js), kept as given and never read here
-    passage: null, // { from, to, times }: the measures Play plays, and how many times (null: over and over), instead of the piece from here on
+    passage: null, // { from, to, times, start?, end? }: the measures Play plays (or the part of them between two times), and how many times (null: over and over), instead of the piece from here on
     pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note] }
     command: null, // { seq, type }: the last thing an agent asked the page to do
   };
@@ -81,14 +81,18 @@ export function cleanBlob(value) {
 }
 
 // A stretch of measures for Play to keep to: measure indexes from 0, and how
-// many times through (null for over and over).
+// many times through (null for over and over). `start` and `end`, in quarter
+// notes from the beginning of the piece, keep it to part of those measures.
 export function cleanPassage(value) {
   if (!isObject(value)) return null;
   const from = Number(value.from);
   const to = Number(value.to ?? value.from);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) return null;
   const times = Number(value.times);
-  return { from, to, times: Number.isInteger(times) && times >= 1 ? Math.min(times, 99) : null };
+  const passage = { from, to, times: Number.isInteger(times) && times >= 1 ? Math.min(times, 99) : null };
+  if (Number.isFinite(value.start) && value.start >= 0) passage.start = value.start;
+  if (Number.isFinite(value.end) && value.end > (passage.start ?? 0)) passage.end = value.end;
+  return passage;
 }
 
 // A hand position given directly: which finger on which note, and which of

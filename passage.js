@@ -2,12 +2,17 @@
 // 0. These find where it sits in the score's time and among its steps.
 
 // Where the passage sits in the piece, in quarter notes: [start, end), with
-// the score's own numbers for its first and last measures.
+// the score's own numbers for its first and last measures. A passage's own
+// `start` and `end` keep it to part of its measures.
 export function passageRange(passage, measures) {
   if (!measures.length) return null;
   const first = measures[Math.min(passage.from, measures.length - 1)];
   const last = measures[Math.min(passage.to, measures.length - 1)];
-  return { start: first.start, end: last.start + last.length, from: first.number, to: last.number };
+  const whole = { start: first.start, end: last.start + last.length };
+  const within = (time) => Number.isFinite(time) && time >= whole.start - 1e-6 && time <= whole.end + 1e-6;
+  const start = within(passage.start) ? passage.start : whole.start;
+  const end = within(passage.end) && passage.end > start ? passage.end : whole.end;
+  return { start, end, from: first.number, to: last.number };
 }
 
 // The steps the passage covers: the first and last indexes in `steps` whose

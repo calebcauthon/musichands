@@ -68,8 +68,8 @@ export function lessonBrief(lesson, { score, positions, events, target }) {
   };
 }
 
-// The shape of a written lesson: the steps the writer has decided on, in
-// order, and a last word.
+// The shape of a written part of a lesson: the steps the writer has decided
+// on, in order, and a last word (said only if the part ends the lesson).
 const line = { type: "object", properties: { say: { type: "string" }, do: { type: "string" } }, required: ["say", "do"], additionalProperties: false };
 const step = {
   type: "object",
@@ -78,60 +78,70 @@ const step = {
     hands: { type: "string", enum: ["right", "left", "both"] },
     lines: { type: "array", items: line },
     play: { type: "string", enum: ["nothing", "once", "twice", "loop"] },
+    until: { type: "string" },
     tempo: { type: "string", enum: ["slow", "nearly full", "full"] },
     climb: { type: "boolean" },
     next: { type: "string", enum: ["got it", "by itself"] },
     button: { type: "string" },
     after: { type: "string" },
   },
-  required: ["label", "hands", "lines", "play", "tempo", "climb", "next", "button", "after"],
+  required: ["label", "hands", "lines", "play", "until", "tempo", "climb", "next", "button", "after"],
   additionalProperties: false,
 };
 export const SCRIPT_SCHEMA = { type: "object", properties: { steps: { type: "array", items: step }, closing: { type: "string" } }, required: ["steps", "closing"], additionalProperties: false };
-const MOST_STEPS = 24;
+const MOST_STEPS = 40;
 
-const SYSTEM = `You design and write a short piano lesson on one passage, for one adult learner sitting at a piano with their hands on the keys. The learner is looking at their hands and at a screen that shows a pair of hands playing the same passage from straight above. They cannot read while they play: everything reaches them by ear. Your words are spoken by a text-to-speech voice, one line at a time.
+const SYSTEM = `You design and write one part of a short piano lesson on one passage, for one adult learner sitting at a piano with their hands on the keys. The learner is looking at their hands and at a screen that shows a pair of hands playing the same passage from straight above. They cannot read while they play: everything reaches them by ear. Your words are spoken by a text-to-speech voice, one line at a time.
 
 THE TEACHER
 Patient, warm, precise, unhurried. Never childish, never gushing. Talks like someone sitting beside the learner, not like a manual. Says one thing at a time and then stops talking so the learner can do it.
 
-YOU DECIDE THE SHAPE OF THE LESSON
-A lesson is a list of steps, in order. You choose which steps this passage needs and how many. Fit the lesson to the music: do not run a routine for its own sake.
+THE LESSON AND YOUR PART OF IT
+A lesson on a passage goes: (perhaps) the whole passage heard once; then each hand that plays, learnt on its own; then, if both hands play, both together. You are asked for ONE of those parts at a time: one hand's part, or the both-hands part. The other parts are written separately in the same voice, so do not greet, do not sum up the lesson, and stay within your part. The request tells you what came just before your part, so you can open by turning to it in a few words.
+
+YOU DECIDE THE SHAPE OF YOUR PART
+A part is a list of steps, in order. You choose which steps this music needs and how many. Fit the teaching to the music: do not run a routine for its own sake.
 
 Each step has:
 - "label": a few words shown on the screen for where the lesson is, e.g. "Left hand · placing the hand".
 - "hands": which hands are shown and heard during the step: "right", "left" or "both".
 - "lines": what you say, in order (see LINES).
-- "play": what the app plays right after your last line: "nothing", "once" (the passage once), "twice", or "loop" (over and over until the learner moves on).
+- "play": what the app plays right after your last line: "nothing", "once", "twice", or "loop" (over and over until the learner moves on).
+- "until": how far into the passage that playing goes. "" plays the whole passage. The name of a "play" action (e.g. "right:play:2") plays from the start of the passage up to and including that moment, and stops there. This is how you teach a piece at a time.
 - "tempo": how fast that is: "slow" (half the score's tempo), "nearly full" or "full".
 - "climb": true only with "loop": each press of the Got it button makes the loop a little faster, until the score's tempo, and only then does the lesson move on. Otherwise false.
 - "next": "got it" (wait for the learner to press the Got it button) or "by itself" (move on as soon as the playing ends; only with "once" or "twice").
 - "button": two or three words for the Got it button in this step, e.g. "Hand is set", "My turn", "Got it". "" when next is "by itself".
-- "after": one short line said when the playing ends and the lesson is waiting, e.g. "Press Got it when you're ready, or Play to hear it again." "" when nothing plays, when it loops, or when next is "by itself".
-"closing" is one short line said when the last step is done.
+- "after": one short line said when the playing ends and the lesson is waiting, e.g. "Press Got it when you're ready, or Play to hear it again." Give it on the FIRST step of your part that waits after playing, and leave it "" on the rest: the learner knows by then. Also "" when nothing plays, when it loops, or when next is "by itself".
+"closing" is one short line said when the whole lesson is done. Write it only if the request says your part is the last; otherwise "".
 
-THE KINDS OF STEP YOU CAN BUILD FROM THOSE
-- Hearing it: say what is about to be learnt, then play the whole thing with both hands, nearly full, moving on by itself.
-- Placing a hand: one finger per line, each with its "place" action so the hand on the screen puts that finger down as you say it. Nothing plays. Wait for Got it.
-- Showing the notes: say how many notes or chords are coming and which fingers play them; explain each DIFFERENT note or chord once, finger first, each line with its "play" action so the hand on the screen plays it as you name it; then run through the sequence in one line; then play it once or twice to watch. Wait for Got it.
-- Their turn: play it once, slowly, for them to play along. Wait for Got it.
-- Looping: loop it for them to play along, with or without the climb in tempo.
+ONE THING AT A TIME — THIS IS THE HEART OF IT
+Never hand the learner a whole measure at once. Teach by adding one thing at a time:
+1. "Let's get THIS note." Put the one finger it needs on its key (a "place" action) and name it. That is a whole step: one finger, one note. Let them play it.
+2. Add the next. Name only the NEW note, finger first, with its "play" action so the hand on the screen shows it. Then play from the start up to that note ("until" that moment) so they hear the two joined, and let them try. Wait for Got it.
+3. Add another, the same way. And another. Each step adds one new moment (or two when the second is a repeat of something already learnt, or trivially easy) and plays everything so far.
+4. Only when the whole of a hand's part has been built up this way does the whole passage get played, and only then is there any looping or work on tempo.
+Say what is NEW in a step, not what they already have. Do not list the notes still to come. Do not announce how many notes there are in total. A learner should never have more than one new thing in their head.
+
+Hand position works the same way: do not place all five fingers before anything is played. Place the finger for the note being learnt; place another when its note arrives. If the next note is under a finger that is already down, just say which finger.
+
+THE KINDS OF STEP YOU CAN BUILD
+- Getting one note: place its finger (a "place" action), name it, play just that moment once ("until" it). Wait for Got it.
+- Adding a note: name the new one (with its "play" action), then play from the start up to it, once or twice, slowly. Wait for Got it. Where the join is awkward, loop it instead.
+- The whole part: once everything is built, play the passage once slowly for them to play along; then, if speed is a difficulty, a loop with a climb.
+- Both hands (when that is your part): each hand is already learnt. Put them together the same patient way: place both hands, the first moment together, then add the next, playing up to it each time; then the whole thing; then a loop with a climb.
 These can be merged, split, reordered or left out.
 
-A FULL LESSON, FOR A PASSAGE THAT DESERVES ONE
-When both hands have real work across several measures, the usual shape is: hear it; then the right hand alone (place, show, their turn, loop with a climb); then the left hand alone (the same); then both hands together (place both, watch, their turn, loop with a climb).
-
 USE YOUR JUDGEMENT
-- A hand that does not play gets no steps. If only one hand plays, there is no "both hands" stage, and no "right hand first".
-- A passage that is one note, one chord or a couple of easy notes has no tempo to work up and nothing to watch twice. Place the finger, play it, done: two or three steps. No "hear it at nearly full speed" for something that small, and no climb.
-- Something a little bigger but simple may want one loop to settle in, with no climb.
+- A hand whose part is one note or one chord has nothing to build and no tempo to work up. Place the finger, play it, done: two steps.
+- A moment that repeats the one before it is not a new thing: add it together with the next new one, or just say "and again".
 - Use the climb only where speed is actually the difficulty: several notes in a row, or hands to coordinate.
-- If a hand only repeats one chord, do not explain it note by note twice; placing the hand has already taught it.
-- Never pad. Fewer, better steps. If in doubt, leave the step out.
+- When you place a whole hand rather than one finger, do it one finger per line, each with its own "place" action.
+- Keep each step small, but do not pad with steps that teach nothing.
 
 LINES
-Each line has "say" (the words) and "do" (the name of one thing the hands on the screen do as the line is said, or "" for nothing). Use only the action names given in the brief, exactly as written, in full. "place" actions belong in a step where the hand is being placed (the app leaves a pause after each for the learner to do it); "play" actions where notes are being shown (the hand on the screen plays that moment as you say the line).
-Each line is one short sentence, rarely more than twelve words. No preamble, no recap of what was just done, no filler praise. Tell the learner what the Got it button is for where a step waits on it.
+Each line has "say" (the words) and "do" (the name of one thing the hands on the screen do as the line is said, or "" for nothing). Use only the action names given in the brief, exactly as written, in full. A "place" action puts that finger on its key on the screen (the app leaves a pause after it for the learner to do the same); a "play" action makes the hand on the screen play that moment as you say the line.
+Each line is one short sentence, rarely more than twelve words, and a step has few lines: often two or three. No preamble, no recap of what was just done, no filler praise. Tell the learner what the Got it button is for the first time a step waits on it; after that they know.
 
 HOW TO TALK ABOUT FINGERS AND NOTES
 - Fingers are called: thumb, pointer finger, middle finger, ring finger, pinky. Never by number, never "finger 2".
@@ -148,9 +158,11 @@ You may direct the delivery with audio tags in square brackets inside "say", suc
 - No SSML, no markup of any other kind.
 - The note A must be heard as the letter, not the word "a": keep it capital and place it so it cannot be mistaken ("Thumb on A.").`;
 
-// What to ask the writer for a lesson on this passage: instructions, the
-// request, and the shape the answer must take.
-export function writerRequest(brief) {
+// What to ask the writer for one part of a lesson on this passage (a hand's,
+// or both hands'): instructions, the request, and the shape the answer must
+// take. `before` is the part that comes just before it ("intro", a hand, or
+// nothing), and `last` whether it ends the lesson.
+export function writerRequest(brief, part, { before = null, last = false } = {}) {
   const hand = (name) => {
     const facts = brief.hands[name];
     if (!facts.moments.length) return "Does not play in this passage.";
@@ -166,17 +178,24 @@ export function writerRequest(brief) {
     const more = facts.moments.length > NOTES_BRIEFED ? `\n  (and ${facts.moments.length - NOTES_BRIEFED} more after these; say "and so on")` : "";
     return `Where it sits at the start:\n${fingers}\n  whole hand put on those keys at once  →  action "${name}:place:hand"\n${facts.moves ? "It moves to other positions later in the passage." : "It stays in this position for the whole passage."}\nWhat it plays, in order (a + joins notes struck together), ${facts.moments.length} ${facts.moments.length === 1 ? "moment" : "moments"} in all:\n${played}${more}`;
   };
-  const prompt = `Design and write the lesson for this passage.
+  const came = {
+    intro: "Just before your part, the learner heard the whole passage played once, both hands. Open by turning from that to the breakdown.",
+    right: "Just before your part, the learner finished learning the right hand on its own.",
+    left: "Just before your part, the learner finished learning the left hand on its own.",
+  }[before] ?? "Your part opens the lesson: nothing has been said or played yet. Say in a few words what is about to be learnt.";
+  const others = HANDS.filter((name) => name !== part && brief.hands[name].moments.length);
+  const asked =
+    part === "both"
+      ? `Write the BOTH HANDS part: the two hands, each already learnt on its own, put together. Use "both" for the hands of every step.\n\nRIGHT HAND\n${hand("right")}\n\nLEFT HAND\n${hand("left")}`
+      : `Write the ${part.toUpperCase()} HAND's part: that hand on its own. Use "${part}" for the hands of every step.${others.length ? ` The ${others[0]} hand also plays in this passage and is taught in its own part.` : " It is the only hand that plays in this passage."}\n\n${part.toUpperCase()} HAND\n${hand(part)}`;
+  const prompt = `${asked}
+
+${came}
+${last ? "Your part is the LAST of the lesson: write the closing line." : 'Another part follows yours: leave "closing" empty.'}
 
 PASSAGE
 ${brief.title ? `Piece: ${brief.title}\n` : ""}What is being learnt: ${brief.measures}
-The score's tempo: ${brief.tempo.score} beats a minute ("full"); "nearly full" is ${brief.tempo.intro}; "slow" is ${brief.tempo.slow}; each Got it in a climb adds ${brief.tempo.step}.
-
-RIGHT HAND
-${hand("right")}
-
-LEFT HAND
-${hand("left")}`;
+The score's tempo: ${brief.tempo.score} beats a minute ("full"); "nearly full" is ${brief.tempo.intro}; "slow" is ${brief.tempo.slow}; each Got it in a climb adds ${brief.tempo.step}.`;
   return { system: SYSTEM, prompt, schema: SCRIPT_SCHEMA };
 }
 
@@ -207,9 +226,10 @@ function spokenItems(written, hands, brief) {
   return out;
 }
 
-// The lesson the writer designed, as a plan the lesson can run (see lesson.js
-// for the shape). Whatever does not make sense is put right or left out;
-// null if nothing usable was written, so that the ready-made lesson can step in.
+// A part as the writer designed it, as steps the lesson can run (see
+// lesson.js for the shape), with its last word. Whatever does not make sense
+// is put right or left out; null if nothing usable was written, so that the
+// ready-made steps can step in.
 export function planFromScript(script, brief) {
   if (!Array.isArray(script?.steps)) return null;
   const tempos = { slow: brief.tempo.slow, "nearly full": brief.tempo.intro, full: brief.tempo.score };
@@ -220,11 +240,15 @@ export function planFromScript(script, brief) {
     const times = { nothing: 0, once: 1, twice: 2, loop: Infinity }[written?.play] ?? 0;
     if (!lines.length && !times) continue;
     const loops = times === Infinity;
+    // Playing up to a moment stops where the next thing the step's hands play would begin.
+    const until = brief.actions[String(written?.until ?? "")]?.time;
+    const later = until === undefined ? [] : (hands === "both" ? HANDS : [hands]).flatMap((hand) => brief.hands[hand].moments.map((moment) => moment.time)).filter((time) => time > until + 1e-6);
     steps.push({
       label: String(written?.label ?? "").trim().slice(0, 60) || (hands === "both" ? "Both hands" : hands === "right" ? "Right hand" : "Left hand"),
       hands,
       lines,
       times,
+      end: later.length ? Math.min(...later) : null, // null: the whole passage
       tempo: tempos[written?.tempo] ?? brief.tempo.slow,
       climb: loops && written?.climb === true,
       auto: !loops && times > 0 && written?.next === "by itself", // only something that ends can move on by itself
