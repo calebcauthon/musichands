@@ -15,7 +15,7 @@ async function minorDescent(overrides = {}) {
 test("a lesson starts at the measure shown and takes a few after it", () => {
   assert.deepEqual(defaultLesson(2, 16), { from: 2, to: 5 });
   assert.deepEqual(defaultLesson(14, 16), { from: 14, to: 15 }, "but not past the end of the piece");
-  assert.deepEqual(cleanLesson({ from: 1, to: 3, style: "one-thing", score: "abc", part: 2 }), { from: 1, to: 3, style: "one-thing", score: "abc" });
+  assert.deepEqual(cleanLesson({ from: 1, to: 3, style: "one-thing", score: "abc", part: 2 }), { part: 2, mode: "teacher", from: 1, to: 3, style: "one-thing", score: "abc" });
   assert.equal(cleanLesson({ from: 1, to: 3, style: "shouting" }).style, "lead", "an unknown way of teaching is the default");
   assert.equal(cleanLesson({ from: 3, to: 1 }), null);
   assert.equal(cleanLesson("later"), null);

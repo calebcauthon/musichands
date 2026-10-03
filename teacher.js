@@ -21,7 +21,7 @@
 // teacher is spoken and then the teacher listens, so an ordinary exchange
 // costs one call.
 import { matchingMoments } from "./corrections.js";
-import { briefText, cleanLesson, FINGER_PAUSE, FINGER_SHORT, handMoments, lessonRange, momentName, OVERHEAD, slowTempo, stageHands } from "./lesson.js";
+import { briefText, cleanLesson, FINGER_PAUSE, FINGER_SHORT, handMoments, lessonRange, momentName, NO_LESSON, OVERHEAD, slowTempo, stageHands } from "./lesson.js";
 import { findStyle } from "./teaching-styles.js";
 
 export const ACT_WAIT = 10 * 60 * 1000; // ms an act waits for a browser before it is given up
@@ -30,7 +30,6 @@ const MOST_PAUSE = 10; // seconds
 const NOTE = /^[A-G][#b]?-?\d$/;
 const HANDS = ["right", "left", "both"];
 const NO_POSE = { left: null, right: null };
-const NO_LESSON = { lesson: null, passage: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE };
 
 // ---------------------------------------------------------------------------
 // What the teacher is told
@@ -185,7 +184,7 @@ export class Teacher {
   // Begins a lesson. Throws when one is on, or the workspace has no music.
   async start(record, { from, to, style, said = "" } = {}) {
     if (this.session(record)) throw new Error("A lesson is already under way in this workspace");
-    const lesson = cleanLesson({ from, to, style, score: record.state.score?.id ?? "" });
+    const lesson = cleanLesson({ mode: "teacher", from, to, style, score: record.state.score?.id ?? "" });
     if (!lesson) throw new Error("Say which measures: { from, to }, by index from 0");
     const music = await this.music(record);
     const range = lessonRange(lesson, music.score.measures);
@@ -283,7 +282,8 @@ export class Teacher {
   // turned to another piece, ends the teacher's too.
   settle(record) {
     const session = this.session(record);
-    if (session && (!cleanLesson(record.state.lesson) || record.state.score?.id !== session.lesson.score)) this.stop(record, "stopped").catch(() => {});
+    const kept = cleanLesson(record.state.lesson);
+    if (session && (kept?.mode !== "teacher" || record.state.score?.id !== session.lesson.score)) this.stop(record, "stopped").catch(() => {});
   }
 
   // Ends a lesson from outside (Stop, the page opened afresh, the workspace gone).

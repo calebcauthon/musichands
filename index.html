@@ -30,13 +30,20 @@
       <section class="theater" aria-label="The music and the hands">
         <div class="score-panel" aria-label="Sheet music">
           <div id="score-container" class="score-container"></div>
-          <!-- Choosing the passage to learn: click its first measure in the notation, then its last; and how to be taught. -->
+          <!-- Choosing the passage to learn: click its first measure in the notation, then its last; and how to learn it.
+               Each way of learning is a module (learning-teacher.js, learning-drill.js) with its own choices here. -->
           <div class="lesson-pick" id="lesson-pick" hidden>
             <span class="lesson-pick__text" id="lesson-pick-text">Click the first measure to learn, then the last.</span>
-            <select class="lesson-pick__style" id="lesson-style" title="How the teacher goes about it"></select>
-            <span class="lesson-pick__said">
-              <input class="lesson-pick__input" id="lesson-said" type="text" placeholder="Anything to tell the teacher?" autocomplete="off" />
-              <button class="button lesson-mic" type="button" id="lesson-pick-mic" title="Hold to speak to the teacher" aria-label="Hold to speak">🎤</button>
+            <span class="lesson-pick__modes" id="lesson-modes" role="group" aria-label="How to learn it"></span>
+            <span class="lesson-pick__options" id="lesson-options" data-mode="teacher">
+              <select class="lesson-pick__style" id="lesson-style" title="How the teacher goes about it"></select>
+              <span class="lesson-pick__said">
+                <input class="lesson-pick__input" id="lesson-said" type="text" placeholder="Anything to tell the teacher?" autocomplete="off" />
+                <button class="button lesson-mic" type="button" id="lesson-pick-mic" title="Hold to speak to the teacher" aria-label="Hold to speak">🎤</button>
+              </span>
+            </span>
+            <span class="lesson-pick__options" id="lesson-options-drill" data-mode="drill">
+              <span class="lesson-pick__note">Nobody talks: each hand placed, played slowly four times, then faster; then both.</span>
             </span>
             <button class="button button--primary" type="button" id="lesson-start" title="Learn these measures (Enter)">Start</button>
             <button class="button" type="button" id="lesson-cancel" title="Never mind (Escape)">Cancel</button>
@@ -62,7 +69,7 @@
               <input id="numbers-toggle" type="checkbox" checked />
               <span>Finger numbers</span>
             </label>
-            <button class="button learn-button" type="button" id="learn" aria-pressed="false" hidden title="Learn a few measures with the teacher: pick them in the notation and how you want to be taught (L)">Learn</button>
+            <button class="button learn-button" type="button" id="learn" aria-pressed="false" title="Learn a few measures: pick them in the notation and how to learn them (L)">Learn</button>
             <button class="button full-screen-button" type="button" id="full-screen" aria-pressed="false" title="Fill the screen with the piano, under the line of music being played (F)">Full screen</button>
             <button class="button gear" type="button" id="settings-open" title="Detail, agents and the look of the notation" aria-label="Settings">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -73,7 +80,7 @@
           </div>
           <div id="hands-stage" class="stage-frame" role="img" aria-label="Both hands on the piano"></div>
           <button class="song-name" type="button" id="score-title" title="Change the song, or bring in another">Loading the score…</button>
-          <!-- The lesson under way: which passage, what the teacher and the learner have said, and the ways to answer. -->
+          <!-- A lesson with the teacher: which passage, what the teacher and the learner have said, and the ways to answer. -->
           <section class="lesson" id="lesson" hidden aria-label="The lesson">
             <p class="lesson__kicker" id="lesson-kicker">Learning</p>
             <p class="lesson__progress" id="lesson-progress"></p>
@@ -91,6 +98,21 @@
             <div class="lesson__actions">
               <button class="button button--primary" type="button" id="lesson-next" title="Tell the teacher you have it (G)">✓ Got it</button>
               <button class="button" type="button" id="lesson-stop" title="Stop the lesson and keep the piece as it was">Stop</button>
+            </div>
+          </section>
+          <!-- The drill: where it is in its steps, and the music under the learner's hand. -->
+          <section class="lesson" id="drill" hidden aria-label="The drill">
+            <p class="lesson__kicker" id="drill-kicker">Drilling</p>
+            <p class="lesson__progress" id="drill-progress"></p>
+            <p class="lesson__status" id="drill-status"></p>
+            <div class="lesson__transport" role="group" aria-label="The music">
+              <button class="button" type="button" id="drill-pause" title="Pause the drill where it is. Press again to carry on">⏸ Pause</button>
+              <button class="button" type="button" id="drill-back" title="Back five seconds, and play">↶ 5 s</button>
+              <button class="button" type="button" id="drill-top" title="The passage from the top, and play">⏮ From the top</button>
+              <button class="button" type="button" id="drill-skip" title="On to the next step (G)">Skip ▸</button>
+            </div>
+            <div class="lesson__actions">
+              <button class="button" type="button" id="drill-stop" title="Stop the drill and keep the piece as it was">Stop</button>
             </div>
           </section>
           <div class="hand-choice" role="group" aria-label="Which hands to see and hear">

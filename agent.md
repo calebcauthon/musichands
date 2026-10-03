@@ -94,7 +94,7 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
 | `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`, with optional `"start"` and `"end"` (quarter notes from the beginning of the piece) to keep it to part of those measures. Measure indexes count from 0. See "Playing a passage". |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
-| `lesson` | The lesson under way, or `null`: `{ from, to, style, score }`. The workspace stores it as given; the page's learning module and the teacher read it. See "Lessons". |
+| `lesson` | The lesson under way, or `null`: `{ mode, from, to, score, … }`. The workspace stores it as given; the page's learning modules and the teacher read it. See "Lessons". |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -209,21 +209,38 @@ curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
 
 ## Lessons
 
-Learning is a module on the page (`learning.js`) and a **teacher** on the
-server (`teacher.js`): an agent that is handed the music and the screen's
-tools and talks with the learner. The teacher is a model on OpenRouter; a
-site without `OPENROUTER_API_KEY` has no teacher and answers `503` to all of
-this. The lesson under way is kept in the workspace as `lesson`, which the
-page and the teacher read and the server itself does not:
+Learning is a module on the page (`learning.js`) with two ways of learning
+a passage, each a module of its own. The lesson under way is kept in the
+workspace as `lesson`, which the page's modules (and the teacher) read and
+the server itself does not; `mode` says whose it is, `from` and `to` are
+measure indexes from 0, `score` the piece.
+
+**The drill** (`mode: "drill"`) is rigid and silent and needs nothing from
+the server: the lead browser goes through a fixed list of steps (each hand
+placed and held, then played slowly four times, faster twice, at tempo
+twice; then the other hand; then both), keeping its place in `step`:
 
 ```json
-{ "from": 2, "to": 5, "style": "hands-separate", "score": "<score id>" }
+{ "mode": "drill", "from": 2, "to": 5, "step": 0, "score": "<score id>" }
 ```
 
-`from` and `to` are measure indexes from 0; `style` is a way of teaching:
-`lead` (the teacher decides), `hands-separate` (right hand, then left, then
-both, slowly and then up to tempo), `one-thing` (one spot drilled) or
-`play-along` (few words, loop and speed up).
+Write that (with `passage` to the measures, `time` to their start and the
+camera overhead, as for the teacher below) to start one from outside; raise
+`step` to move it on; send `"lesson": null, "passage": null` to stop.
+
+**The teacher** (`mode: "teacher"`) is an agent on the server
+(`teacher.js`) that is handed the music and the screen's tools and talks
+with the learner. It is a model on OpenRouter; a site without
+`OPENROUTER_API_KEY` has no teacher and answers `503` to all of this.
+
+```json
+{ "mode": "teacher", "from": 2, "to": 5, "style": "hands-separate", "score": "<score id>" }
+```
+
+`style` is a way of teaching: `lead` (the teacher decides),
+`hands-separate` (right hand, then left, then both, slowly and then up to
+tempo), `one-thing` (one spot drilled) or `play-along` (few words, loop and
+speed up).
 
 **Starting a lesson.** `POST /api/workspaces/<id>/teacher` with
 `{ "from": 2, "to": 5, "style": "lead", "said": "I just want to learn this." }`

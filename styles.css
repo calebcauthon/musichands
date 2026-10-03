@@ -1517,6 +1517,41 @@ kbd {
   gap: 4px;
 }
 
+/* The ways of learning, one pressed. */
+.lesson-pick__modes {
+  display: flex;
+  gap: 0;
+}
+
+.lesson-pick__modes .button {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.lesson-pick__modes .button + .button {
+  margin-left: -1px;
+}
+
+.lesson-pick__modes .button[aria-pressed="true"] {
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.lesson-pick__options {
+  display: contents;
+}
+
+.lesson-pick__options[hidden] {
+  display: none;
+}
+
+.lesson-pick__note {
+  align-self: center;
+  color: oklch(40% 0.03 60);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
 .lesson-pick__input {
   width: 14rem;
   min-height: 32px;

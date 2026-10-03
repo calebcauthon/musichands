@@ -1,12 +1,14 @@
-// A lesson: a few measures being learnt with the teacher (teacher.js, on the
-// server). The lesson under way is kept in the workspace as `lesson`:
-// { from, to, style, score }, the measures (by index from 0), the teaching
-// style and the piece it is a lesson on. The workspace stores it as given
-// and never reads it; the page (learning.js) and the teacher do.
+// A lesson: a few measures being learnt one way or another. The lesson under
+// way is kept in the workspace as `lesson`: { mode, from, to, score, … }, the
+// way of learning (a module on the page: "teacher", "drill"), the measures
+// (by index from 0), the piece it is a lesson on, and whatever else the
+// module keeps there (a teaching style, a step). The workspace stores it as
+// given and never reads it; the page (learning.js and its modules) and the
+// teacher (teacher.js, on the server) do.
 //
-// This file is what both sides share: the record, where a passage sits in
-// the piece, how notes and fingers are spoken of, and the brief, which is
-// what the teacher is told about the music.
+// This file is what they all share: the record, where a passage sits in the
+// piece, how notes and fingers are spoken of, and the brief, which is what
+// the teacher is told about the music.
 import { passageRange } from "./passage.js";
 import { cleanStyle } from "./teaching-styles.js";
 
@@ -23,18 +25,34 @@ export function defaultLesson(measureIndex, measureCount) {
   return { from, to: Math.min(from + LESSON_MEASURES - 1, Math.max(0, measureCount - 1)) };
 }
 
-// A lesson as the workspace holds it, made sound, or null for none.
+export const DEFAULT_MODE = "teacher"; // a lesson that does not say how it is learnt
+const SCALAR = (value) => ["string", "number", "boolean"].includes(typeof value);
+
+// A lesson as the workspace holds it, made sound, or null for none. A
+// module's own fields come through as long as they are plain values.
 export function cleanLesson(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const from = Number(value.from);
   const to = Number(value.to);
   if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to < from) return null;
+  const own = Object.fromEntries(Object.entries(value).filter(([key, entry]) => !["mode", "from", "to", "score", "style"].includes(key) && SCALAR(entry)));
+  const mode = typeof value.mode === "string" && value.mode ? value.mode : DEFAULT_MODE;
   return {
+    ...own,
+    mode,
     from,
     to,
-    style: cleanStyle(value.style),
+    ...(mode === "teacher" ? { style: cleanStyle(value.style) } : {}),
     ...(typeof value.score === "string" ? { score: value.score } : {}), // the piece it is a lesson on
   };
+}
+
+// The workspace as it is with no lesson on: the whole piece, both hands, at its own tempo.
+export const NO_LESSON = { lesson: null, passage: null, playing: false, tempo: null, hands: { left: { show: true, sound: true }, right: { show: true, sound: true } }, pose: { left: null, right: null } };
+
+// Where to play from when going back a few seconds within a passage: never before its start.
+export function backTime(time, seconds, tempo, start) {
+  return Math.max(start, (Number.isFinite(time) ? time : start) - (seconds * tempo) / 60);
 }
 
 // A slow tempo to start at, given the score's own. Never below the slowest the transport plays.

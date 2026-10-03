@@ -86,7 +86,7 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
     const started = await api("/teacher", "POST", { from: 0, to: 1, style: "hands-separate", said: "You lead the way." });
     assert.equal(started.status, 201);
     const status = await started.json();
-    assert.deepEqual(status.lesson, { from: 0, to: 1, style: "hands-separate", score: made.state.score.id });
+    assert.deepEqual(status.lesson, { mode: "teacher", from: 0, to: 1, style: "hands-separate", score: made.state.score.id });
     assert.deepEqual(status.transcript, [{ n: 0, who: "learner", text: "You lead the way." }]);
     assert.equal((await api("/teacher", "POST", { from: 0, to: 1 })).status, 409, "one lesson at a time");
     const set = await state();
