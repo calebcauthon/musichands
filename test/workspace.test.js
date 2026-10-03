@@ -391,52 +391,6 @@ test("Play can be kept to a stretch of measures, a set number of times or over a
   assert.equal(state.passage, null);
 });
 
-test("the writer composes to order, keeps what it wrote, and is not there unless asked for", async () => {
-  const dataDir = await mkdtemp(path.join(os.tmpdir(), "musichands-"));
-  const asked = [];
-  const compose = async (request) => {
-    asked.push(request);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    return { lines: [`written for: ${request.prompt}`] };
-  };
-  compose.label = "test";
-  const server = createAppServer(undefined, { dataDir, compose, speak: null });
-  await new Promise((resolve) => server.listen(0, resolve));
-  const base = `http://localhost:${server.address().port}`;
-  try {
-    const made = await (await fetch(`${base}/api/workspaces`, { method: "POST", body: "{}" })).json();
-    const headers = { authorization: `Bearer ${made.token}`, "content-type": "application/json" };
-    const ask = (body, with_ = headers) => fetch(`${base}/api/workspaces/${made.id}/compose`, { method: "POST", headers: with_, body: JSON.stringify(body) });
-    const request = { system: "You write lessons.", prompt: "measures 1 to 4", schema: { type: "object" } };
-    assert.equal((await ask(request, { "content-type": "application/json" })).status, 401);
-    const [first, second] = await Promise.all([ask(request), ask(request)]);
-    assert.deepEqual((await first.json()).output, { lines: ["written for: measures 1 to 4"] });
-    assert.deepEqual((await second.json()).output, { lines: ["written for: measures 1 to 4"] });
-    assert.equal((await ask(request)).status, 200);
-    assert.equal(asked.length, 1, "the same request, at once or later, is written once");
-    assert.equal((await ask({ ...request, prompt: "measures 5 to 8" })).status, 200);
-    assert.equal(asked.length, 2);
-    assert.equal((await ask({ system: "x", prompt: "", schema: {} })).status, 400);
-    assert.equal((await ask({ system: "x", prompt: "y" })).status, 400, "the shape of the answer must be given");
-    assert.equal((await ask({ ...request, prompt: "z".repeat(50000) })).status, 400);
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-    await rm(dataDir, { recursive: true, force: true });
-  }
-  const bare = await mkdtemp(path.join(os.tmpdir(), "musichands-"));
-  const without = createAppServer(undefined, { dataDir: bare, compose: null, speak: null });
-  await new Promise((resolve) => without.listen(0, resolve));
-  try {
-    const at = `http://localhost:${without.address().port}`;
-    const made = await (await fetch(`${at}/api/workspaces`, { method: "POST", body: "{}" })).json();
-    const answer = await fetch(`${at}/api/workspaces/${made.id}/compose`, { method: "POST", headers: { authorization: `Bearer ${made.token}` }, body: JSON.stringify({ prompt: "x", schema: {} }) });
-    assert.equal(answer.status, 503);
-  } finally {
-    await new Promise((resolve) => without.close(resolve));
-    await rm(bare, { recursive: true, force: true });
-  }
-});
-
 test("the voice reads only a few lines at once, in order, and asks again when refused for being busy", async () => {
   let busy = 0;
   let most = 0;

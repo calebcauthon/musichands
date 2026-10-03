@@ -2,23 +2,30 @@
 // interface (the seam at the foot of sheet.js) and uses nothing else of the
 // page: it reads the music and the workspace through it, and does everything
 // it does by changing the workspace's public fields — tempo, hands, time,
-// camera, pose, passage, playing — as an agent could. A lesson is a plan of
-// steps, in parts (lesson.js): where the site has a writer, each hand's part
-// is designed and written for the passage (lesson-writer.js) while the
-// opening plays; otherwise it is the ready-made one. This file is the Learn
-// button, choosing the measures, the lesson panel, the voice, and going
-// through the plan a step at a time.
+// pose, passage, playing — as an agent could.
 //
-// The lesson under way is kept in the workspace as `lesson`. The workspace
-// stores it as given and never reads it, so the shape of a lesson can change
-// here without touching the page or the server.
-import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describeProgress, lessonParts, lessonPassage, lessonRange, OVERHEAD, readyMadeSteps, stageHands } from "./lesson.js";
-import { lessonBrief, planFromScript, shownText, writerRequest } from "./lesson-writer.js";
-import { Narrator } from "./speech.js";
+// The lesson itself is given by the teacher (teacher.js, on the server): an
+// agent that knows the music and talks with the learner. This file is the
+// Learn button, choosing the measures and the way of teaching, the lesson
+// panel with what has been said, and the learner's ways of answering — the
+// Got it button, a line typed, the microphone. On the browser that leads
+// (the one that plays the music) it also performs what the teacher asks of
+// the screen: saying a line, placing a hand, playing a moment or the
+// passage, a pause. Each is reported done, which is when the teacher hears
+// the result. Whatever the learner says while something is going on cuts it
+// short, here and on the server alike.
+//
+// The lesson under way is kept in the workspace as `lesson` (lesson.js). The
+// workspace stores it as given and never reads it.
+import { cleanLesson, defaultLesson, lessonRange, shownText, stageHands } from "./lesson.js";
+import { Microphone, Narrator } from "./speech.js";
+import { findStyle, STYLES } from "./teaching-styles.js";
 
 const NO_POSE = { left: null, right: null };
-const WRITER_WAIT = 75000; // ms a part of a lesson waits to be written before the ready-made one steps in
-const keyOf = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.part}.${lesson.step}` : null);
+const MOMENT_PAUSE = 800; // ms a moment is left to sound before the next thing
+const LINES_SHOWN = 8; // lines of the transcript kept on the panel
+const GOT_IT = "Got it.";
+const BACK_SECONDS = 5; // how far the back button goes
 
 export function mountLearning(app, root = document) {
   const learnButton = root.querySelector("#learn");
@@ -26,85 +33,49 @@ export function mountLearning(app, root = document) {
     root: root.querySelector("#lesson"),
     kicker: root.querySelector("#lesson-kicker"),
     progress: root.querySelector("#lesson-progress"),
-    caption: root.querySelector("#lesson-caption"),
+    transcript: root.querySelector("#lesson-transcript"),
+    status: root.querySelector("#lesson-status"),
+    pause: root.querySelector("#lesson-pause"),
+    back: root.querySelector("#lesson-back"),
+    top: root.querySelector("#lesson-top"),
+    form: root.querySelector("#lesson-say"),
+    input: root.querySelector("#lesson-input"),
+    mic: root.querySelector("#lesson-mic"),
     next: root.querySelector("#lesson-next"),
     stop: root.querySelector("#lesson-stop"),
-    play: root.querySelector("#lesson-play"),
-    restart: root.querySelector("#lesson-restart"),
-    again: root.querySelector("#lesson-again"),
   };
-  const pick = { root: root.querySelector("#lesson-pick"), text: root.querySelector("#lesson-pick-text"), start: root.querySelector("#lesson-start"), cancel: root.querySelector("#lesson-cancel") };
+  const pick = {
+    root: root.querySelector("#lesson-pick"),
+    text: root.querySelector("#lesson-pick-text"),
+    style: root.querySelector("#lesson-style"),
+    said: root.querySelector("#lesson-said"),
+    mic: root.querySelector("#lesson-pick-mic"),
+    start: root.querySelector("#lesson-start"),
+    cancel: root.querySelector("#lesson-cancel"),
+  };
+  for (const style of STYLES) {
+    const option = root.createElement("option");
+    option.value = style.id;
+    option.textContent = style.name;
+    option.title = style.blurb;
+    pick.style.append(option);
+  }
 
   let picking = null; // choosing the measures: { from, to, anchor }; anchor is the end clicked first, while the other is awaited
-  let seen; // the lesson, by key, last laid on the screen
-  let scoreSeen = null; // the piece that was open then
+  let scoreSeen = null; // the piece that was open when the screen was last laid
   let opening = true; // the workspace has only just been opened: nothing has been laid on the screen yet
+  let lead = false; // this browser plays the music, so it performs what the teacher asks of the screen
 
-  let turn = 0; // which narration is the one going on; a later one, or a stop, overtakes it
-  let told = null; // the step, by key, whose lines have been said right through
-  let ended = false; // what the step plays has played out, so Play starts it from the top
-  const reminded = new Set(); // what has been said after a step played out, so the same reminder is not said at every step
-  let planned = null; // the plan for the passage being learnt: { key, names, parts (promises of steps), ready (the steps of each part, once there), closing }
+  let joined = null; // the lesson joined: { key, leave, transcript, status, error }
+  let act = null; // what the screen is doing for the teacher: { id, type, loop, cancel }
 
-  // The panel shows what has been said in the phase so far, a line at a
-  // time, without the directions written into a line for the voice.
-  const voice = new Narrator({
-    fetchSpeech: (text) => app.speech(text),
-    onLine: (line) => {
-      const words = shownText(line);
-      panel.caption.textContent = panel.caption.textContent ? `${panel.caption.textContent} ${words}` : words;
-      paint();
-    },
-    onDone: () => paint(),
-  });
-  function sayAfresh(lines) {
-    voice.stop();
-    panel.caption.textContent = "";
-    return voice.sayAll(Array.isArray(lines) ? lines : [lines]);
-  }
+  const voice = new Narrator({ fetchSpeech: (text) => app.speech(text) });
+  const microphone = new Microphone();
 
   // The lesson the workspace holds, if it is one on the piece that is open.
   function current(state = app.state) {
     const lesson = cleanLesson(state?.lesson);
     return lesson && app.score && (!lesson.score || lesson.score === state.score?.id) ? lesson : null;
-  }
-
-  // The plan for a lesson's passage, asked for once. It comes in parts: the
-  // opening is ready-made, so a lesson starts at once; each hand's part, and
-  // both hands', is designed and written for the passage where the site has
-  // a writer, all of them at once, and is the ready-made one otherwise (or
-  // if the writing fails, or takes too long). Every part comes to its steps.
-  function planning(lesson) {
-    const music = { score: app.score, positions: app.positions, events: app.events, target: app.scoreTempo };
-    const brief = lessonBrief(lesson, music);
-    const key = JSON.stringify([app.state?.score?.id, lesson.from, lesson.to, brief.hands, brief.tempo]);
-    if (planned?.key !== key) {
-      const names = lessonParts(lesson, music);
-      const mine = { key, names, ready: names.map(() => null), closing: "" };
-      mine.parts = names.map((name, index) => {
-        const readyMade = () => readyMadeSteps(name, lesson, music);
-        if (name === "intro") return Promise.resolve((mine.ready[index] = readyMade()));
-        const last = index === names.length - 1;
-        const written = app
-          .compose(writerRequest(brief, name, { before: names[index - 1] ?? null, last }))
-          .then((script) => planFromScript(script, brief))
-          .catch((error) => {
-            console.warn(`MusicHands: the ${name} part of the lesson could not be written.`, error);
-            return null;
-          });
-        return Promise.race([written, new Promise((resolve) => setTimeout(() => resolve(null), WRITER_WAIT))]).then((part) => {
-          if (last && part?.closing) mine.closing = part.closing;
-          return (mine.ready[index] = part?.steps ?? readyMade());
-        });
-      });
-      planned = mine;
-    }
-    return planned;
-  }
-
-  // The step the lesson is at, if that part of its plan is there yet.
-  function stepNow(lesson = current()) {
-    return (lesson && planning(lesson).ready[lesson.part]?.[lesson.step]) || null;
   }
 
   // -------------------------------------------------------------------------
@@ -113,7 +84,7 @@ export function mountLearning(app, root = document) {
   // a second click ends it (in either direction).
 
   function offerLesson() {
-    if (!app.score || !app.state) return;
+    if (!app.score || !app.state || !app.site.teacher) return;
     const offered = defaultLesson(app.measureIndex, app.score.measures.length);
     if (app.state.playing) app.change({ playing: false });
     showPicking({ from: offered.from, to: offered.to, anchor: null });
@@ -129,6 +100,7 @@ export function mountLearning(app, root = document) {
       const number = (index) => app.score.measures[index].number;
       const chosen = picking.from === picking.to ? `Measure ${number(picking.from)}` : `Measures ${number(picking.from)}–${number(picking.to)}`;
       pick.text.textContent = picking.anchor === null ? `${chosen}. Click a measure to start somewhere else.` : `${chosen}. Now click the last measure.`;
+      if (!was) pick.said.value = "";
     }
     if (Boolean(was) !== Boolean(picking)) app.onMeasure(picking ? { click: pickMeasure, hover: stretchTo } : null);
     if (!was || !picking || was.from !== picking.from || was.to !== picking.to) app.tint(picking ? { from: picking.from, to: picking.to, strong: true } : null);
@@ -147,177 +119,342 @@ export function mountLearning(app, root = document) {
     showPicking({ from: Math.min(picking.anchor, index), to: Math.max(picking.anchor, index), anchor: picking.anchor });
   }
 
-  function startPicked() {
+  async function startPicked() {
     const { from, to } = picking;
+    const style = pick.style.value;
+    const said = pick.said.value.trim();
     showPicking(null);
-    startLesson(from, to);
+    pick.start.disabled = true;
+    try {
+      // The teacher sets the workspace up for the lesson; the change comes back through show().
+      await app.teacher.start({ from, to, style, said });
+    } catch (error) {
+      console.warn("MusicHands: the lesson could not start.", error);
+      app.change({ lesson: null });
+      showPicking({ from, to, anchor: null });
+      pick.text.textContent = `The teacher could not start: ${error.message}`;
+    } finally {
+      pick.start.disabled = false;
+    }
   }
 
   // -------------------------------------------------------------------------
-  // The lesson
-
-  // Puts the workspace at the start of the passage, seen from above. Each
-  // step is set up, talked through and then played by enterStep(), as the
-  // change comes back through show().
-  function startLesson(from, to) {
-    if (!app.score || !app.state) return;
-    const lesson = { from: Math.min(from, to), to: Math.max(from, to), part: 0, step: 0, score: app.state.score?.id ?? "" };
-    reminded.clear();
-    const passage = { from: lesson.from, to: lesson.to, times: 1 };
-    app.change({ lesson, passage, time: lessonRange(lesson, app.score.measures).start, playing: false, pose: NO_POSE, hands: stageHands("both"), camera: { ...app.state.camera, view: { ...OVERHEAD }, autoCut: false } });
-  }
+  // The lesson on the screen
 
   // The workspace as it is with no lesson on: the whole piece, both hands, at its own tempo.
   const NO_LESSON = { lesson: null, passage: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE };
 
+  // Joins the lesson the workspace holds: what has been said so far, and
+  // from now on what the teacher says and asks for.
+  async function join(lesson) {
+    const key = JSON.stringify(lesson);
+    if (joined?.key === key) return;
+    leave();
+    const mine = { key, transcript: [], status: null, error: "", leave: null };
+    joined = mine;
+    mine.leave = app.teacher.events((event, data) => {
+      if (joined !== mine) return;
+      if (event === "said") mine.transcript[data.n] = data;
+      else if (event === "status") {
+        mine.status = data.status;
+        mine.error = data.error ?? "";
+      } else if (event === "act") perform(data);
+      else if (event === "cut") cutShort(data.id);
+      else if (event === "ended") {
+        mine.status = data.reason === "failed" ? "failed" : "ended";
+        mine.error = data.error ?? "";
+        if (data.reason === "failed") app.change(NO_LESSON);
+      }
+      paint();
+    });
+    try {
+      const status = await app.teacher.status();
+      if (joined !== mine) return;
+      if (!status.on) {
+        // The server knows of no lesson (it was restarted, say): the workspace's is over.
+        app.change(NO_LESSON);
+        return;
+      }
+      for (const line of status.transcript) mine.transcript[line.n] ??= line;
+      mine.status ??= status.status;
+      for (const waiting of status.acts ?? []) perform(waiting);
+    } catch (error) {
+      if (joined === mine) {
+        console.warn("MusicHands: the lesson could not be joined.", error);
+        if (error.status === 503) app.change(NO_LESSON);
+      }
+    }
+    paint();
+  }
+
+  function leave() {
+    if (!joined) return;
+    joined.leave?.();
+    joined = null;
+    cutShort(act?.id, { tell: false });
+    paused = false;
+    voice.stop();
+  }
+
   function stopLesson() {
     if (!app.state?.lesson) return;
-    turn += 1;
+    cutShort(act?.id, { tell: false });
     voice.stop();
+    app.teacher.stop().catch(() => {}); // the teacher puts the workspace back; if it cannot be reached, the page does
     app.change(NO_LESSON);
   }
 
-  // The lesson is over: the piece is put back, and the last word said.
-  function finish(plan) {
-    turn += 1;
-    app.change(NO_LESSON);
-    sayAfresh(plan.closing || describeAdvance("done", { target: app.scoreTempo }));
-  }
+  // -------------------------------------------------------------------------
+  // What the teacher asks of the screen
 
-  // "Got it": in a climb, a little faster; otherwise the next step, or done.
-  function gotIt() {
-    const lesson = current();
-    const plan = lesson && planning(lesson);
-    const steps = plan?.ready[lesson.part];
-    if (!steps) return; // still being written
-    const target = app.scoreTempo;
-    const next = advanceLesson(lesson, steps, plan.names.length, app.tempo, target);
-    if (next.event === "step") app.change({ lesson: next.lesson, playing: false }); // set up and talked through by enterStep()
-    else if (next.event === "done") finish(plan);
-    else {
-      app.change({ tempo: next.tempo }); // the music, if playing, follows the new tempo where it is
-      sayAfresh(describeAdvance(next.event, { tempo: next.tempo, target }));
-    }
-  }
-
-  // Says a step's lines, then plays the passage if the step plays it. A line
-  // may come with something for the hands to do as it is said: a pose to
-  // take, or a moment of the piece to play.
-  function narrate(lesson, step, still, { thenPlay = true } = {}) {
-    const key = keyOf(lesson);
-    if (told === key) told = null;
-    const lines = step.lines.map((line) => {
-      if (line?.pose) return { say: line.say, before: () => still() && app.change({ pose: line.pose }) };
-      if (line?.time !== undefined) return { say: line.say, before: () => still() && app.playMoment(line.time) };
-      return line;
-    });
-    sayAfresh(lines).then((ending) => {
-      if (ending === "dropped" || !still()) return;
-      told = key;
-      paint();
-      if (!thenPlay || !step.times || app.state.playing) return;
-      ended = false;
-      app.playFrom(lessonRange(lesson, app.score.measures).start);
-    });
-  }
-
-  // Pause stops the lesson where it is, the voice and the music both. Play
-  // carries on: a step that was still being talked through is said again
-  // from its start (and then played); one that was playing goes on from
-  // where it stopped, or from the top if it had played out.
-  function pauseOrPlay() {
-    const lesson = current();
-    const step = stepNow(lesson);
-    if (!step) return;
-    if (voice.speaking || app.state.playing) {
-      turn += 1; // nothing that was waiting to be said or played goes ahead
-      voice.stop();
-      if (app.state.playing) app.change({ playing: false });
-      paint();
+  // Performs an act, when this is the browser that plays the music, and
+  // reports it done. A `cancel` undoes what can be undone when it is cut short.
+  let held = null; // an act that arrived while the lesson was paused, kept for when it goes on
+  function perform(asked) {
+    if (!lead || !joined || act?.id === asked.id) return;
+    if (paused) {
+      held = asked;
       return;
     }
-    const key = keyOf(lesson);
-    if (told !== key || !step.times) {
-      const mine = ++turn;
-      if (!step.times) app.change({ pose: NO_POSE }); // a hand being placed is placed afresh
-      narrate(lesson, step, () => mine === turn && keyOf(current()) === key);
-    } else if (ended) {
-      ended = false;
-      app.playFrom(lessonRange(lesson, app.score.measures).start);
-    } else app.togglePlaying();
-  }
-
-  // A step begins: once the plan is there, the workspace is set for the step
-  // (its hands, its tempo, how often Play plays the passage) and the step is
-  // talked through.
-  async function enterStep(lesson) {
-    const key = keyOf(lesson);
-    const mine = ++turn;
-    const still = () => mine === turn && keyOf(current()) === key;
-    voice.stop();
-    panel.caption.textContent = "";
-    told = null;
-    ended = false;
-    const plan = planning(lesson);
-    // Only said to be writing if it is taking a moment.
-    const waiting = setTimeout(() => still() && (panel.caption.textContent = "Writing the next part…"), 600);
-    const steps = (await plan.parts[lesson.part]) ?? [];
-    clearTimeout(waiting);
-    if (!still()) return;
-    panel.caption.textContent = "";
-    const step = steps[lesson.step];
-    if (!step) {
-      // Nothing here (a part with no steps, or a place past its end): on to the next part, or done.
-      if (lesson.part + 1 < plan.names.length) app.change({ lesson: { ...lesson, part: lesson.part + 1, step: 0 } });
-      else if (plan.names.length) finish(plan);
-      else stopLesson(); // nothing in the passage to learn
-      return;
+    if (act) cutShort(act.id, { tell: false }); // only one thing at a time; a newer act takes over
+    const mine = { id: asked.id, type: asked.type, loop: Boolean(asked.loop), cancel: null };
+    act = mine;
+    const still = () => act === mine;
+    const finish = (result) => {
+      if (!still()) return;
+      act = null;
+      app.teacher.done(mine.id, result).catch(() => {});
+      paint();
+    };
+    const after = (ms, result) => {
+      const timer = setTimeout(() => finish(result), ms);
+      mine.cancel = () => clearTimeout(timer);
+    };
+    switch (asked.type) {
+      case "say":
+        voice.stop();
+        voice.say(asked.text).then((ending) => ending !== "dropped" && finish({ spoken: ending === "spoken" }));
+        mine.cancel = () => voice.stop();
+        break;
+      case "pause":
+        after(asked.ms, { paused: true });
+        break;
+      case "place": {
+        const { hand, fingers, press } = asked;
+        if (app.state.playing) app.change({ playing: false });
+        app.change({ pose: { [hand]: fingers.length ? { fingers, press } : null } });
+        after(asked.pauseMs ?? 0, { placed: true });
+        break;
+      }
+      case "play_moment":
+        if (app.state.playing) app.change({ playing: false });
+        app.change({ hands: stageHands(asked.hands), pose: NO_POSE });
+        app.playMoment(asked.time);
+        after(MOMENT_PAUSE, { played: true });
+        break;
+      case "play": {
+        const passage = { from: asked.from, to: asked.to, times: asked.loop ? null : asked.times, start: asked.start ?? null, end: asked.end ?? null };
+        app.playFrom(lessonRange(passage, app.score.measures).start, { passage, hands: stageHands(asked.hands), tempo: asked.tempo, pose: NO_POSE });
+        mine.cancel = () => app.state?.playing && app.change({ playing: false });
+        // Finished by the "played" event below; a loop only by being cut short.
+        break;
+      }
+      default:
+        finish({ error: `the screen cannot ${asked.type}` });
     }
-    app.change({ passage: lessonPassage(lesson, step), hands: stageHands(step.hands), tempo: step.tempo, time: lessonRange(lesson, app.score.measures).start, playing: false, pose: NO_POSE });
-    narrate(lesson, step, still);
+    paint();
   }
 
-  // The passage from the top; played, in a step that plays it.
-  function restart() {
+  // Cuts the act short here: the voice and the music stop. With `tell`, the
+  // teacher is told it was interrupted (when the learner's words will not say so).
+  function cutShort(id, { tell = false } = {}) {
+    if (held && (id === undefined || held.id === id)) held = null;
+    if (!act || (id !== undefined && act.id !== id)) return;
+    const mine = act;
+    act = null;
+    mine.cancel?.();
+    if (tell) app.teacher.done(mine.id, { interrupted: true, learner_said: "" }).catch(() => {});
+    paint();
+  }
+
+  app.addEventListener("played", () => {
+    if (act?.type !== "play" || act.loop) return;
+    const mine = act;
+    act = null;
+    app.teacher.done(mine.id, { played: true }).catch(() => {});
+    paint();
+  });
+
+  // -------------------------------------------------------------------------
+  // The learner's hand on the music: pause where it is, back a little, from the top
+
+  let paused = false; // the lesson is held: the voice where it was, the music where it was
+  let musicHeld = false; // the music was playing when it was held
+
+  function pauseOrResume() {
+    if (!current()) return;
+    if (paused) {
+      paused = false;
+      voice.resume();
+      if (musicHeld && !app.state.playing) app.togglePlaying();
+      if (held) {
+        const next = held;
+        held = null;
+        perform(next);
+      }
+    } else {
+      paused = true;
+      musicHeld = Boolean(app.state.playing);
+      voice.pause();
+      if (musicHeld) app.change({ playing: false });
+    }
+    paint();
+  }
+
+  // Plays the music from a little before where it is, or from the top of
+  // the passage; always plays, so there is nothing else to press.
+  function playBack(seconds) {
     const lesson = current();
     if (!lesson) return;
-    const { start } = lessonRange(lesson, app.score.measures);
-    ended = false;
-    if (stepNow(lesson)?.times) app.playFrom(start);
-    else app.change({ time: start, playing: false });
+    const { start } = lessonRange(app.state.passage ?? lesson, app.score.measures);
+    const time = seconds === null ? start : Math.max(start, (app.state.time ?? start) - (seconds * app.tempo) / 60);
+    if (paused) pauseOrResume();
+    app.playFrom(time);
+    paint();
   }
 
-  // The panel: where the lesson is, and what "got it" will do.
+  // -------------------------------------------------------------------------
+  // What the learner says
+
+  // Sends the learner's words to the teacher, cutting short whatever the
+  // screen was doing: the teacher hears them in its place.
+  function sendWords(text) {
+    const words = String(text ?? "").trim();
+    if (!words || !current()) return;
+    if (act) {
+      const mine = act;
+      act = null;
+      mine.cancel?.();
+    }
+    held = null;
+    paused = false;
+    voice.stop();
+    if (joined) joined.transcript.push({ who: "learner", text: words }); // shown at once; the server's numbered copy takes its place
+    paint();
+    app.teacher.say(words).catch((error) => console.warn("MusicHands: the teacher did not hear that.", error));
+  }
+
+  // The microphone, held: while it is down the voice and the music are
+  // stopped so they are not heard as speech; what was said is sent when it
+  // is let go (or put in the picker's box, while choosing).
+  let listening = false;
+  let interrupted = null; // the act the microphone cut short, until its words are sent or it is given up
+  async function holdMic(down) {
+    if (down === listening) return;
+    listening = down;
+    root.body.classList.toggle("mic-down", down);
+    paint();
+    if (down) {
+      if (current() && act) {
+        interrupted = act;
+        act.cancel?.();
+      }
+      paused = false;
+      voice.stop();
+      try {
+        await microphone.start();
+      } catch (error) {
+        listening = false;
+        root.body.classList.remove("mic-down");
+        giveUp(`The microphone could not be used: ${error.message}`);
+      }
+      return;
+    }
+    const audio = await microphone.stop();
+    if (!audio) return giveUp("Nothing was heard.");
+    setNote("Hearing…");
+    try {
+      const text = await app.hear(audio);
+      setNote("");
+      if (text === null) return giveUp("This site has no ears: type instead.");
+      if (!text) return giveUp("Nothing was heard.");
+      interrupted = null;
+      if (picking) pick.said.value = text;
+      else sendWords(text);
+    } catch (error) {
+      giveUp(`That could not be made out: ${error.message}`);
+    }
+  }
+  // Nothing came of the microphone: the act it cut short is reported so, with no words.
+  function giveUp(why) {
+    if (interrupted) cutShort(interrupted.id, { tell: true });
+    interrupted = null;
+    setNote(why);
+  }
+  let note = ""; // a word from the page itself on the status line
+  function setNote(text) {
+    note = text;
+    paint();
+  }
+
+  // -------------------------------------------------------------------------
+  // The panel
+
+  const STATUS = {
+    thinking: "The teacher is thinking…",
+    speaking: "",
+    playing: "Playing. Say something or press Got it to stop it.",
+    waiting: "",
+    listening: "Your turn: press Got it, or say something.",
+    failed: "",
+    done: "",
+    ended: "",
+  };
+
   function paint(state = app.state) {
     const lesson = current(state);
     panel.root.hidden = !lesson;
+    learnButton.hidden = !app.site.teacher;
     if (lesson || !picking) learnButton.setAttribute("aria-pressed", String(Boolean(lesson)));
     learnButton.textContent = lesson ? "Learning…" : "Learn";
+    pick.mic.hidden = !Microphone.supported || !app.site.ears;
     if (!lesson) return;
     const range = lessonRange(lesson, app.score.measures);
-    const step = stepNow(lesson);
-    const tempos = { tempo: app.tempo, target: app.scoreTempo };
     panel.kicker.textContent = range.from === range.to ? `Learning measure ${range.from}` : `Learning measures ${range.from}–${range.to}`;
-    panel.progress.textContent = step ? describeProgress(step, tempos) : "Writing your lesson…";
-    panel.next.textContent = step ? describeNext(step, tempos) : "…";
-    panel.next.disabled = !step;
-    const going = state.playing || voice.speaking;
-    panel.play.textContent = going ? "⏸ Pause" : "▶ Play";
-    panel.play.title = going ? "Pause the lesson: the voice and the music" : "Carry on with the lesson from here";
-    panel.play.disabled = !step;
+    panel.progress.textContent = findStyle(lesson.style).name;
+    const lines = (joined?.transcript ?? []).filter(Boolean).slice(-LINES_SHOWN);
+    panel.transcript.replaceChildren(
+      ...lines.map((line) => {
+        const p = root.createElement("p");
+        p.className = `lesson__line lesson__line--${line.who === "learner" ? "learner" : "teacher"}`;
+        p.textContent = line.who === "learner" ? line.text : shownText(line.text);
+        return p;
+      }),
+    );
+    panel.transcript.scrollTop = panel.transcript.scrollHeight;
+    const status = joined?.status ?? "thinking";
+    let said = note || STATUS[status] || "";
+    if (status === "failed") said = `The teacher could not be reached${joined?.error ? `: ${joined.error}` : ""}. Press Got it to try again.`;
+    if (paused) said = "Paused. Press Play to carry on.";
+    if (listening) said = "Listening…";
+    panel.status.textContent = said;
+    panel.pause.textContent = paused ? "▶ Play" : "⏸ Pause";
+    panel.pause.setAttribute("aria-pressed", String(paused));
+    panel.mic.hidden = !Microphone.supported || !app.site.ears;
+    panel.mic.setAttribute("aria-pressed", String(listening));
+    pick.mic.setAttribute("aria-pressed", String(listening));
   }
 
-  // Lays the workspace's lesson on the screen. When a step begins, the
-  // browser that began it (or the one that plays the music, when an agent
-  // did) sets it up and talks it through.
-  function show({ state, local, own, lead }) {
+  // Lays the workspace's lesson on the screen.
+  function show({ state, lead: leads }) {
+    lead = Boolean(leads);
     // A lesson is begun by someone, never by opening the page: one left in
     // the workspace from before is ended, quietly, and the piece put back.
     if (opening) {
       opening = false;
       if (state.lesson) {
-        seen = null;
         scoreSeen = state.score?.id ?? null;
+        app.teacher.stop().catch(() => {});
         app.change(NO_LESSON);
         return;
       }
@@ -332,46 +469,23 @@ export function mountLearning(app, root = document) {
     if (kept?.score && kept.score !== scoreId) app.change({ lesson: null });
 
     const lesson = current(state);
+    if (lesson) join(lesson);
+    else leave();
     paint(state);
-    // That part of the plan may still be on its way: the panel is filled in when it lands.
-    if (lesson && !stepNow(lesson)) planning(lesson).parts[lesson.part]?.then(() => paint());
-    const key = keyOf(lesson);
-    if (key === seen) return;
-    const wasOn = Boolean(seen);
-    seen = key;
-    if (!lesson) {
-      turn += 1; // whatever was about to be said is not said
-      if (wasOn && !own) voice.stop(); // ended elsewhere; the last word of a lesson finished here is left to play out
-      panel.caption.textContent = "";
-      return;
-    }
-    if (local || (lead && !own)) enterStep(lesson);
   }
 
   app.addEventListener("state", (event) => show(event.detail));
-  // What was playing has played out: a step that moves on by itself does;
-  // another says what to do next.
-  app.addEventListener("played", () => {
-    const step = stepNow();
-    if (!step) return;
-    ended = true;
-    if (step.auto) gotIt();
-    else if (step.after && !reminded.has(step.after)) {
-      reminded.add(step.after);
-      voice.say(step.after);
-    }
-  });
   app.addEventListener("reset", () => {
-    turn += 1;
-    voice.stop();
-    seen = undefined;
+    leave();
     scoreSeen = null;
     opening = true;
+    lead = false;
     if (picking) showPicking(null);
   });
 
-  // L starts choosing (or stops it), G is "got it"; while choosing, Enter
-  // takes the measures and Escape drops them, whatever has focus.
+  // L starts choosing (or stops it), G is "got it", V held is the
+  // microphone; while choosing, Enter takes the measures and Escape drops
+  // them, whatever has focus.
   app.onKey((event, { onControl }) => {
     if (picking && (event.key === "Enter" || event.key === "Escape")) {
       if (event.key === "Enter") startPicked();
@@ -385,28 +499,46 @@ export function mountLearning(app, root = document) {
       return true;
     }
     if ((event.key === "g" || event.key === "G") && current()) {
-      gotIt();
+      sendWords(GOT_IT);
+      return true;
+    }
+    if ((event.key === "v" || event.key === "V") && (current() || picking) && !panel.mic.hidden) {
+      if (!event.repeat) holdMic(true);
       return true;
     }
     return false;
   });
+  root.addEventListener("keyup", (event) => {
+    if ((event.key === "v" || event.key === "V") && listening) holdMic(false);
+  });
+  for (const button of [panel.mic, pick.mic]) {
+    button.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      button.setPointerCapture?.(event.pointerId);
+      holdMic(true);
+    });
+    for (const name of ["pointerup", "pointercancel"]) button.addEventListener(name, () => holdMic(false));
+  }
 
   learnButton.addEventListener("click", () => (current() ? stopLesson() : picking ? showPicking(null) : offerLesson()));
   pick.start.addEventListener("click", startPicked);
   pick.cancel.addEventListener("click", () => showPicking(null));
-  panel.next.addEventListener("click", gotIt);
-  panel.stop.addEventListener("click", stopLesson);
-  panel.play.addEventListener("click", pauseOrPlay);
-  panel.restart.addEventListener("click", restart);
-  panel.again.addEventListener("click", () => {
-    const lesson = current();
-    const step = stepNow(lesson);
-    if (!step) return;
-    const key = keyOf(lesson);
-    const mine = ++turn;
-    app.change({ pose: NO_POSE }); // a hand being placed is placed afresh
-    narrate(lesson, step, () => mine === turn && keyOf(current()) === key, { thenPlay: !app.state.playing });
+  pick.said.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      startPicked();
+    } else if (event.key === "Escape") showPicking(null);
   });
+  panel.form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendWords(panel.input.value);
+    panel.input.value = "";
+  });
+  panel.next.addEventListener("click", () => sendWords(GOT_IT));
+  panel.stop.addEventListener("click", stopLesson);
+  panel.pause.addEventListener("click", pauseOrResume);
+  panel.back.addEventListener("click", () => playBack(BACK_SECONDS));
+  panel.top.addEventListener("click", () => playBack(null));
 
-  return { offerLesson, startLesson, stopLesson, gotIt };
+  return { offerLesson, stopLesson, sendWords };
 }

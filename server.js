@@ -5,23 +5,21 @@
 // DATA_DIR, each a JSON file with a folder of its own scores beside it. A new
 // workspace starts with a copy of the scores listed in scores/starter.json.
 // See agent.md for the API.
-import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { copyFile, mkdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyHandMoves } from "./corrections.js";
 import { assignFingering } from "./fingering.js";
 import { parseScore } from "./score-model.js";
+import { Teacher } from "./teacher.js";
 import { cleanState, COMMANDS, mergeState, projectScreen } from "./workspace-model.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const MAX_BODY = 8 * 1024 * 1024;
 const MAX_SPEECH = 1500; // characters the voice will read in one go
-const MAX_COMPOSE = 40000; // characters of instructions the writer will take
 const WORKSPACE_ID = /^ws-[a-z0-9]{10}$/;
 const SCORE_ID = /^[0-9a-f]{64}$/;
 const TYPES = {
@@ -40,7 +38,7 @@ const TYPES = {
   ".ico": "image/x-icon",
 };
 // Scores are private too: a piece is only reached through a workspace that holds a copy.
-const PRIVATE = new Set(["test", "node_modules", "private", "data", "scores", "server.js", "Makefile", "package.json", "package-lock.json"]);
+const PRIVATE = new Set(["test", "node_modules", "private", "data", "scores", "server.js", "teacher.js", "Makefile", "package.json", "package-lock.json"]);
 // Sounds and the hand model never change; pages and scripts should stay fresh.
 const LONG_LIVED = new Set([".mp3", ".glb"]);
 // The file a request path names, or null if it is not one the app serves.
@@ -340,67 +338,66 @@ export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = 
   return speak;
 }
 
-// The writer: text composed to order by Claude, through the `claude` command
-// on this machine (`claude -p`), with no tools and none of the machine's own
-// settings. It is given instructions, a request and the shape the answer must
-// take, and answers that shape. Only there when the server is started with
-// MUSICHANDS_WRITER=claude: a public site has no business running it.
-export function claudeWriter({ enabled = process.env.MUSICHANDS_WRITER === "claude", model = process.env.MUSICHANDS_WRITER_MODEL || "sonnet", effort = process.env.MUSICHANDS_WRITER_EFFORT || "low", command = "claude", timeout = 180000 } = {}) {
-  if (!enabled) return null;
-  const compose = ({ system, prompt, schema }) =>
-    new Promise((resolve, reject) => {
-      const args = ["-p", "--model", model, "--effort", effort, "--tools", "", "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "json", "--system-prompt", system, "--json-schema", JSON.stringify(schema)];
-      const child = spawn(command, args, { cwd: os.tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
-      let out = "";
-      let err = "";
-      const timer = setTimeout(() => child.kill(), timeout);
-      child.stdout.on("data", (chunk) => (out += chunk));
-      child.stderr.on("data", (chunk) => (err += chunk));
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(new Error(`the writer could not be started: ${error.message}`));
-      });
-      child.on("close", () => {
-        clearTimeout(timer);
-        try {
-          const answer = JSON.parse(out);
-          if (answer.is_error || !answer.structured_output) throw new Error(String(answer.result ?? "no answer").slice(0, 200));
-          resolve(answer.structured_output);
-        } catch (error) {
-          reject(new Error(`the writer gave nothing usable: ${error.message}${err ? ` (${err.trim().slice(0, 200)})` : ""}`));
-        }
-      });
-      child.stdin.end(prompt);
-    });
-  compose.label = `claude/${model}/${effort}`;
-  return compose;
+// The teacher's mind: a model reached through OpenRouter, which speaks the
+// OpenAI chat-completions dialect with tool calls, so any model there will
+// do; OPENROUTER_MODEL names it. Answers the assistant's message for a
+// conversation and a set of tools, or null if there is no key.
+export function openRouterModel({ key = process.env.OPENROUTER_API_KEY, model = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4.5", url = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions", request = fetch, timeout = 120000, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  if (!key) return null;
+  const ask = async (messages, tools) => {
+    for (let attempt = 0; ; attempt += 1) {
+      let response;
+      try {
+        response = await request(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "http-referer": "https://github.com/calebcauthon/musichands", "x-title": "MusicHands" },
+          body: JSON.stringify({ model, messages, tools, tool_choice: "auto" }),
+          signal: AbortSignal.timeout(timeout),
+        });
+      } catch (error) {
+        if (attempt >= 1) throw new Error(`the teacher could not be reached: ${error.message}`);
+        await wait(1000);
+        continue;
+      }
+      if (response.ok) {
+        const body = await response.json();
+        const message = body?.choices?.[0]?.message;
+        if (!message) throw new Error(`the teacher answered nothing usable${body?.error?.message ? `: ${body.error.message}` : ""}`);
+        return message;
+      }
+      const text = await response.text().catch(() => "");
+      if ((response.status === 429 || response.status >= 500) && attempt < 1) {
+        await wait(2000);
+        continue;
+      }
+      throw new Error(`the teacher answered ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+    }
+  };
+  ask.label = `openrouter/${model}`;
+  return ask;
 }
 
-export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", compose = claudeWriter() } = {}) {
+// The ears: ElevenLabs speech-to-text, which turns a recording of the
+// learner into words. Answers the text, or null if there is no key.
+export function elevenLabsEars({ key = process.env.ELEVENLABS_API_KEY, model = process.env.ELEVENLABS_STT_MODEL_ID || "scribe_v1", request = fetch } = {}) {
+  if (!key) return null;
+  const hear = async (audio, mime = "audio/webm") => {
+    const form = new FormData();
+    form.append("model_id", model);
+    form.append("file", new Blob([audio], { type: mime }), `speech.${mime.split("/")[1]?.split(";")[0] || "webm"}`);
+    const response = await request("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": key }, body: form });
+    if (!response.ok) throw new Error(`the ears answered ${response.status}`);
+    const body = await response.json();
+    return String(body?.text ?? "").trim();
+  };
+  hear.label = model;
+  return hear;
+}
+
+export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", model = openRouterModel(), hear = elevenLabsEars() } = {}) {
   const workspaces = new Workspaces(dataDir, root);
   // Each line the voice has read is kept under its hash, so a repeat costs
   // nothing. Another voice reads everything afresh.
-  // What the writer has composed is kept the same way, under the hash of what
-  // it was asked; the same request made twice at once is one piece of work.
-  const composing = new Map();
-  const composed = async (request) => {
-    const key = createHash("sha256").update(`${compose.label ?? ""}\n${JSON.stringify(request)}`, "utf8").digest("hex");
-    const file = path.join(dataDir, "compose", `${key}.json`);
-    const kept = await readFile(file, "utf8").then(JSON.parse).catch(() => null);
-    if (kept) return kept;
-    if (!composing.has(key)) {
-      composing.set(
-        key,
-        compose(request)
-          .then(async (output) => {
-            await writeAtomic(file, JSON.stringify(output));
-            return output;
-          })
-          .finally(() => composing.delete(key)),
-      );
-    }
-    return composing.get(key);
-  };
   const speechFile = (text) => path.join(dataDir, "speech", `${createHash("sha256").update(`${voiceName}\n${text}`, "utf8").digest("hex")}.mp3`);
 
   // The MusicXML of the score a workspace has open.
@@ -412,6 +409,23 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
     response.writeHead(200, { "content-type": "application/vnd.recordare.musicxml+xml; charset=utf-8", "cache-control": "no-store" });
     response.end(xml);
   };
+
+  // The piece a workspace has open, read and fingered as the page has it,
+  // corrections and all. A piece is read once and kept for a while.
+  const parsedScores = new Map(); // score id → parsed
+  const music = async (record) => {
+    const xml = await scoreText(record);
+    const id = record.state.score.id;
+    if (!parsedScores.has(id)) {
+      parsedScores.set(id, parseScore(xml));
+      if (parsedScores.size > 8) parsedScores.delete(parsedScores.keys().next().value);
+    }
+    const parsed = parsedScores.get(id);
+    const events = applyHandMoves(parsed.events, record.state.corrections.hands);
+    const fingered = assignFingering(events, { overrides: record.state.corrections.fingers });
+    return { score: parsed, events: fingered.events, positions: fingered.positions, tempo: parsed.tempo ?? 80 };
+  };
+  const teacher = model ? new Teacher({ model, music, patch: (record, state) => workspaces.patch(record, { state }, "teacher") }) : null;
 
   const api = async (request, response) => {
     const url = new URL(request.url, "http://localhost");
@@ -441,7 +455,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(201, { ...connection(record), version: record.version, state: record.state, scores: record.scores });
     }
 
-    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|compose|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
+    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|hear|teacher(?:\/(?:events|say|done))?|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
     if (!match) return json(404, { error: "Not found" });
     const record = await workspaces.get(match[1]);
     if (!record) return json(404, { error: "No such workspace" });
@@ -461,16 +475,9 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return null;
     }
     if (part === "/screen" && request.method === "GET") {
-      let xml;
-      try {
-        xml = await scoreText(record);
-      } catch {
-        return json(409, { error: "The workspace has no score open" });
-      }
-      const parsed = parseScore(xml);
-      const events = applyHandMoves(parsed.events, record.state.corrections.hands);
-      const fingered = assignFingering(events, { overrides: record.state.corrections.fingers });
-      return json(200, { workspace: { id: record.id, name: record.name, version: record.version }, ...projectScreen(parsed, fingered.events, fingered.positions, record.state), state: record.state });
+      if (!record.state.score) return json(409, { error: "The workspace has no score open" });
+      const { score, events, positions } = await music(record);
+      return json(200, { workspace: { id: record.id, name: record.name, version: record.version }, ...projectScreen(score, events, positions, record.state), state: record.state });
     }
     if (part === "/score" && request.method === "GET") {
       try {
@@ -514,6 +521,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       }
       if (request.method === "DELETE" && !summary) {
         await workspaces.removeScore(record, scoreId, by);
+        teacher?.settle(record);
         return json(200, { deleted: scoreId, version: record.version, state: record.state, scores: record.scores });
       }
       return json(405, { error: "Method not allowed" });
@@ -547,23 +555,69 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       response.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "private, max-age=86400" });
       return response.end(audio);
     }
-    if (part === "/compose" && request.method === "POST") {
-      if (!compose) return json(503, { error: "This site has no writer: start the server with MUSICHANDS_WRITER=claude" });
-      let body;
+    if (part === "/hear" && request.method === "POST") {
+      if (!hear) return json(503, { error: "This site has no ears: set ELEVENLABS_API_KEY on the server" });
+      const audio = await readBody(request);
+      if (!audio.length) return json(400, { error: "Send the recording as the body" });
       try {
-        body = JSON.parse((await readBody(request)).toString("utf8"));
-      } catch {
-        return json(400, { error: "The body must be JSON" });
-      }
-      const system = String(body?.system ?? "");
-      const prompt = String(body?.prompt ?? "");
-      if (!prompt.trim() || !body?.schema || typeof body.schema !== "object") return json(400, { error: "Say what to write and in what shape: { system, prompt, schema }" });
-      if (system.length + prompt.length > MAX_COMPOSE) return json(400, { error: "That is too much to ask the writer at once" });
-      try {
-        return json(200, { output: await composed({ system, prompt, schema: body.schema }) });
+        return json(200, { text: String((await hear(audio, String(request.headers["content-type"] ?? "audio/webm"))) ?? "").trim() });
       } catch (error) {
-        return json(502, { error: error.message });
+        return json(502, { error: `The ears could not make that out: ${error.message}` });
       }
+    }
+    if (part.startsWith("/teacher")) {
+      if (!teacher) return json(503, { error: "This site has no teacher: set OPENROUTER_API_KEY (and OPENROUTER_MODEL) on the server" });
+      const body = async () => {
+        try {
+          const text = (await readBody(request)).toString("utf8");
+          return text.trim() ? JSON.parse(text) : {};
+        } catch {
+          return null;
+        }
+      };
+      if (part === "/teacher" && request.method === "GET") return json(200, teacher.status(record));
+      if (part === "/teacher" && request.method === "POST") {
+        const asked = await body();
+        if (!asked) return json(400, { error: "The body must be JSON" });
+        if (teacher.session(record)) return json(409, { error: "A lesson is already under way in this workspace" });
+        try {
+          const status = await teacher.start(record, asked);
+          return json(201, status);
+        } catch (error) {
+          return json(400, { error: error.message });
+        }
+      }
+      if (part === "/teacher" && request.method === "DELETE") return json(200, { stopped: await teacher.stop(record, "stopped") });
+      if (part === "/teacher/events" && request.method === "GET") {
+        const status = teacher.status(record);
+        if (!status.on) return json(404, { error: "No lesson is under way" });
+        response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
+        send(response, "status", { status: status.status, ...(status.error ? { error: status.error } : {}) });
+        const stop = teacher.watch(record, response);
+        const beat = setInterval(() => response.write(": keep\n\n"), 25000).unref();
+        request.on("close", () => {
+          clearInterval(beat);
+          stop?.();
+        });
+        return null;
+      }
+      if (part === "/teacher/say" && request.method === "POST") {
+        const asked = await body();
+        if (!asked) return json(400, { error: "The body must be JSON" });
+        if (!teacher.session(record)) return json(404, { error: "No lesson is under way" });
+        try {
+          return json(200, teacher.say(record, asked.text));
+        } catch (error) {
+          return json(400, { error: error.message });
+        }
+      }
+      if (part === "/teacher/done" && request.method === "POST") {
+        const asked = await body();
+        if (!asked) return json(400, { error: "The body must be JSON" });
+        if (!teacher.session(record)) return json(404, { error: "No lesson is under way" });
+        return json(200, teacher.done(record, asked.id, asked.result));
+      }
+      return json(405, { error: "Method not allowed" });
     }
     if (part === "/commands" && request.method === "POST") {
       let body;
@@ -578,7 +632,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(202, { command: record.state.command, version: record.version });
     }
     if (part === "") {
-      if (request.method === "GET") return json(200, { ...connection(record), version: record.version, state: record.state, scores: record.scores, updated: record.updated });
+      if (request.method === "GET") return json(200, { ...connection(record), version: record.version, state: record.state, scores: record.scores, updated: record.updated, site: { voice: Boolean(speak), teacher: Boolean(teacher), ears: Boolean(hear) } });
       if (request.method === "PATCH" || request.method === "PUT") {
         let body;
         try {
@@ -588,9 +642,11 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
         }
         const change = body?.state !== undefined || body?.name !== undefined ? body : { state: body };
         await workspaces.patch(record, change, by, { replace: request.method === "PUT" });
+        teacher?.settle(record);
         return json(200, { version: record.version, state: record.state, name: record.name, scores: record.scores });
       }
       if (request.method === "DELETE") {
+        await teacher?.stop(record, "removed");
         await workspaces.remove(record);
         return json(200, { deleted: record.id });
       }

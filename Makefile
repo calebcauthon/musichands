@@ -1,11 +1,11 @@
 PORT ?= 4173
-# Who writes the lessons: claude (the `claude` command on this machine), or nothing for the ready-made wording
-WRITER ?= claude
+# The teacher is a model on OpenRouter: set OPENROUTER_API_KEY and OPENROUTER_MODEL in the environment
+# (and ELEVENLABS_API_KEY for the voice and the microphone). Without them the page has no Learn button.
 
 .PHONY: dev test
 
 dev: ## Serve the app and its workspaces on $(PORT), or the next free port after it
-	@MUSICHANDS_WRITER=$(WRITER) node server.js $(PORT) --find-port
+	@node server.js $(PORT) --find-port
 
 test:
 	node --test

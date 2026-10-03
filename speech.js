@@ -14,6 +14,9 @@ export class Narrator {
     this.current = null;
     this.serial = 0;
     this.serverVoice = true; // until the server says it has none
+    this.paused = false;
+    this.holdCurrent = null; // pauses the line being read
+    this.resumeCurrent = null; // and takes it up again
   }
 
   get speaking() {
@@ -50,7 +53,7 @@ export class Narrator {
   }
 
   async next() {
-    if (this.current || !this.queue.length) return;
+    if (this.current || !this.queue.length || this.paused) return;
     const entry = this.queue.shift();
     const serial = ++this.serial;
     this.current = entry;
@@ -67,6 +70,8 @@ export class Narrator {
     }
     if (serial !== this.serial) return; // stopped while reading; stop() has settled it
     this.current = null;
+    this.holdCurrent = null;
+    this.resumeCurrent = null;
     entry.resolve(spoken ? "spoken" : "silent");
     if (!this.queue.length) this.onDone();
     this.next();
@@ -110,6 +115,8 @@ export class Narrator {
         URL.revokeObjectURL(url);
         resolve(false);
       };
+      this.holdCurrent = () => audio.pause();
+      this.resumeCurrent = () => audio.play().catch(() => {});
       audio.addEventListener("ended", () => {
         URL.revokeObjectURL(url);
         this.stopCurrent = null;
@@ -134,6 +141,8 @@ export class Narrator {
         synth.cancel();
         resolve(false);
       };
+      this.holdCurrent = () => synth.pause();
+      this.resumeCurrent = () => synth.resume();
       utterance.onend = () => {
         this.stopCurrent = null;
         resolve(!cancelled());
@@ -152,8 +161,70 @@ export class Narrator {
     const dropped = [...this.queue, ...(this.current ? [this.current] : [])];
     this.queue = [];
     this.current = null;
+    this.paused = false;
     this.stopCurrent?.();
     this.stopCurrent = null;
+    this.holdCurrent = null;
+    this.resumeCurrent = null;
     for (const entry of dropped) entry.resolve("dropped");
+  }
+
+  // Holds the line being read where it is, and whatever is queued after it.
+  pause() {
+    if (this.paused) return;
+    this.paused = true;
+    this.holdCurrent?.();
+  }
+
+  // Takes up the line where it was held, and goes on with the rest.
+  resume() {
+    if (!this.paused) return;
+    this.paused = false;
+    this.resumeCurrent?.();
+    this.next();
+  }
+}
+
+// The microphone: records while held, and answers what was recorded as a
+// Blob the server's ears can hear. One recording at a time.
+export class Microphone {
+  constructor() {
+    this.recorder = null;
+    this.chunks = [];
+  }
+
+  get recording() {
+    return Boolean(this.recorder);
+  }
+
+  static get supported() {
+    return typeof MediaRecorder !== "undefined" && Boolean(globalThis.navigator?.mediaDevices?.getUserMedia);
+  }
+
+  // Starts recording. Throws if the microphone is refused or absent.
+  async start() {
+    if (this.recorder) return;
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const type = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"].find((candidate) => MediaRecorder.isTypeSupported(candidate));
+    const recorder = new MediaRecorder(stream, type ? { mimeType: type } : {});
+    this.chunks = [];
+    recorder.addEventListener("dataavailable", (event) => event.data.size && this.chunks.push(event.data));
+    recorder.start();
+    this.recorder = recorder;
+  }
+
+  // Stops recording and answers the recording, or null if nothing was recorded.
+  stop() {
+    const recorder = this.recorder;
+    if (!recorder) return Promise.resolve(null);
+    this.recorder = null;
+    return new Promise((resolve) => {
+      recorder.addEventListener("stop", () => {
+        for (const track of recorder.stream.getTracks()) track.stop();
+        const type = recorder.mimeType || "audio/webm";
+        resolve(this.chunks.length ? new Blob(this.chunks, { type }) : null);
+      });
+      recorder.stop();
+    });
   }
 }
