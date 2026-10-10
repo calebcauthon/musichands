@@ -1457,5 +1457,5 @@ Object.defineProperties(app, {
     },
   },
 });
-window.musichands = { page, app, learning: mountLearning(app), view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
+window.musichands = { page, app, audio, learning: mountLearning(app), view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
 await openFirstWorkspace();
