@@ -440,13 +440,25 @@ export function elevenLabsEars({ key = process.env.ELEVENLABS_API_KEY, model = p
 
 // The site's health: what it needs to work, each checked and told plainly.
 // Never says a key, only whether there is one.
-export function healthChecks({ model }) {
+export function healthChecks({ model, speak = null, hear = null }) {
   return [
     {
       id: "llm-key",
       name: "LLM API key",
       ok: Boolean(model),
-      detail: model ? `OPENROUTER_API_KEY is set${model.label ? `; the teacher is ${model.label}` : ""}` :"OPENROUTER_API_KEY is not set on the server, so there is no teacher",
+      detail: model ? `OPENROUTER_API_KEY is set${model.label ? `; the teacher is ${model.label}` : ""}` : "OPENROUTER_API_KEY is not set on the server, so there is no teacher",
+    },
+    {
+      id: "voice",
+      name: "Voice",
+      ok: Boolean(speak),
+      detail: speak ? `ELEVENLABS_API_KEY is set; the voice is ElevenLabs ${speak.label ?? ""}`.trim() : "ELEVENLABS_API_KEY is not set on the server, so the browser's own voice reads the lines",
+    },
+    {
+      id: "ears",
+      name: "Microphone",
+      ok: Boolean(hear),
+      detail: hear ? `ELEVENLABS_API_KEY is set; speech is heard by ElevenLabs ${hear.label ?? ""}`.trim() : "ELEVENLABS_API_KEY is not set on the server, so there is no microphone: type instead",
     },
   ];
 }
@@ -500,7 +512,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
     const connection = (record) => ({ id: record.id, name: record.name, token: record.token, url: `${site}/#ws=${record.id}&token=${record.token}`, api: `${site}/api/workspaces/${record.id}`, manual: `${site}/agent.md`, connectionString: `MusicHands workspace "${record.name}"\nURL: ${site}\nWorkspace: ${record.id}\nToken: ${record.token}\nManual: ${site}/agent.md` });
 
     if (url.pathname === "/api/health" && request.method === "GET") {
-      const checks = healthChecks({ model });
+      const checks = healthChecks({ model, speak, hear });
       return json(200, { ok: checks.every((check) => check.ok), checks });
     }
 

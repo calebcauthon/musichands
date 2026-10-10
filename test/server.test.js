@@ -56,19 +56,26 @@ test("asked to find a port, the server takes the next free one", async () => {
   }
 });
 
-test("the health checks say whether the LLM key is set, and never the key", async () => {
+test("the health checks say whether the LLM key, the voice and the ears are there, and never a key", async () => {
   const fake = Object.assign(async () => ({}), { label: "openrouter/some-model" });
-  for (const [model, ok] of [[null, false], [fake, true]]) {
-    const server = createAppServer(undefined, { model, speak: null, hear: null });
+  const voice = Object.assign(async () => Buffer.alloc(0), { label: "v/eleven_v4" });
+  const ears = Object.assign(async () => "", { label: "scribe_v1" });
+  for (const [model, speak, hear, ok] of [[null, null, null, false], [fake, null, null, false], [fake, voice, ears, true]]) {
+    const server = createAppServer(undefined, { model, speak, hear });
     await new Promise((resolve) => server.listen(0, resolve));
     try {
       const response = await fetch(`http://localhost:${server.address().port}/api/health`);
       assert.equal(response.status, 200);
       const body = await response.json();
       assert.equal(body.ok, ok);
+      assert.deepEqual(body.checks.map((check) => check.id), ["llm-key", "voice", "ears"]);
       const key = body.checks.find((check) => check.id === "llm-key");
-      assert.equal(key.ok, ok);
-      assert.match(key.detail, ok ? /is set; the teacher is openrouter\/some-model/ : /not set/);
+      assert.equal(key.ok, Boolean(model));
+      assert.match(key.detail, model ? /is set; the teacher is openrouter\/some-model/ : /not set/);
+      const spoken = body.checks.find((check) => check.id === "voice");
+      assert.equal(spoken.ok, Boolean(speak));
+      assert.match(spoken.detail, speak ? /ElevenLabs v\/eleven_v4/ : /browser's own voice/);
+      assert.equal(body.checks.find((check) => check.id === "ears").ok, Boolean(hear));
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

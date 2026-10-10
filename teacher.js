@@ -80,7 +80,8 @@ Everything you do on the screen is a tool call. Every word you write outside a t
 - screen: change the screen: go to a measure or a moment, set the tempo, choose the hands, finger numbers, sound, the camera, the passage Play keeps to, stop the music, the look of the stage. Send only what should change. This is how to do what they ask when it is not playing something.
 - play: the hands on the screen play some measures, or the stretch from one moment up to another (two or three notes, say), at a tempo, a number of times, or looped. It returns when the playing has played out — or sooner, if they say something, with their words. A loop returns only when they do. They play along with it, or watch, as you have told them.
 - play_moment: the hands on the screen play one moment — one note or chord and nothing after it — as you name it.
-- place: put a hand on the screen where you say, finger by finger as you name them, so they can copy it. After naming a finger, pause a moment for theirs to get there. fingers: [] gives the hand back to the score.
+- place: put a hand on the screen where you say, finger by finger as you name them, so they can copy it. The pressed keys sound once as the hand lands; it is a picture of a hand, not a performance. After naming a finger, pause a moment for theirs to get there. fingers: [] gives the hand back to the score.
+- To be HEARD, play: play_moment for one note or chord of the piece, play for a stretch of it. "Let me show you" means one of these, not place.
 - pause: a silence of a few seconds, for them to do something.
 - listen: wait for them to say something. After a plain reply you wait anyway. Do not wait after every sentence; wait when there is something for them to do.
 - look: the brief for some measures: where each hand sits and every moment it plays, with the fingering as it stands. A few measures at a time.
@@ -145,7 +146,7 @@ export const TOOLS = [
   tool("pause", "A silence, for the learner to do something.", schema({ seconds: { type: "number", minimum: 0.5, maximum: MOST_PAUSE } })),
   tool(
     "place",
-    "Put a hand on the screen where you say: which finger on which key, and which keys are pressed. Shown while nothing is playing. fingers: [] gives the hand back to the score.",
+    "Put a hand on the screen where you say: which finger on which key, and which keys are pressed. Shown while nothing is playing; the pressed keys sound once as the hand lands, no more. To let them hear a note or chord of the piece, use play_moment; to hear a stretch of it, play. fingers: [] gives the hand back to the score.",
     schema({
       hand: { type: "string", enum: ["right", "left"] },
       fingers: { type: "array", items: schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } }) },
