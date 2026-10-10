@@ -1805,3 +1805,33 @@ body.full-screen .theater {
 .health-check strong {
   color: var(--ink);
 }
+
+/* The companion: the same panel as a lesson's, kept small and quiet — a
+   line to type in, the microphone, and the last few things said once there
+   are any. A lesson's panel takes its place. */
+.lesson--companion {
+  width: min(26rem, 48%);
+  padding: 10px 12px 12px;
+  border-color: oklch(95% 0.03 84 / 0.3);
+  background: oklch(16% 0.02 50 / 0.78);
+}
+
+.lesson--companion .lesson__transcript {
+  min-height: 0;
+  max-height: 8em;
+  margin-top: 0;
+  margin-bottom: 6px;
+}
+
+.lesson--companion .lesson__status {
+  margin-top: 0;
+  min-height: 0;
+}
+
+.lesson--companion .lesson__status:empty {
+  display: none;
+}
+
+.lesson--companion .lesson__say {
+  margin-top: 0;
+}

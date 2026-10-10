@@ -11,7 +11,12 @@
 // the notation and the way of learning them, and handing the lesson under
 // way to the module it belongs to. The lesson is kept in the workspace as
 // `lesson` (lesson.js), with `mode` saying whose it is; the workspace stores
-// it as given and never reads it.
+// it as given and never reads it. There is one agent in a workspace
+// (teacher.js, on the server), there all the time; the page's one link to it
+// (agent-link.js) is made here and shared. With no lesson on it is shown by
+// the companion's box (companion.js): it answers and does what it is asked
+// without teaching. A lesson with the teacher is the same agent, told how to
+// teach, shown by the lesson's panel.
 //
 // A way of learning is { id, name, blurb, available(app), mount(app, host) },
 // and what mount answers has:
@@ -20,7 +25,9 @@
 //   leave()                    the lesson is no longer on the screen: ended, or another piece opened
 //   discard()                  a lesson of this mode found when the page opened: put right quietly
 //   key(event, { onControl, picking }) → true if taken
-// The host gives it { root, picking() } and the module's own markup is in index.html.
+// The host gives it { root, picking(), link } and the module's own markup is in index.html.
+import { createAgentLink } from "./agent-link.js";
+import { mountCompanion } from "./companion.js";
 import { cleanLesson, defaultLesson, DEFAULT_MODE, NO_LESSON } from "./lesson.js";
 import drillMode from "./learning-drill.js";
 import teacherMode from "./learning-teacher.js";
@@ -44,8 +51,10 @@ export function mountLearning(app, root = document) {
   let opening = true; // the workspace has only just been opened: nothing has been laid on the screen yet
   let shown = null; // the module whose lesson is on the screen
 
-  const host = { root, picking: () => picking };
+  const link = createAgentLink(app, { root });
+  const host = { root, picking: () => picking, link };
   const modules = new Map(MODES.map((mode) => [mode.id, { ...mode, ...mode.mount(app, host) }]));
+  const companion = mountCompanion(app, host);
   const modeOf = (lesson) => (lesson && modules.get(lesson.mode)) || null;
   const offered = () => MODES.filter((mode) => mode.available(app));
 
@@ -150,6 +159,15 @@ export function mountLearning(app, root = document) {
   }
 
   function show({ state, lead }) {
+    link.setLead(lead);
+    // Another piece: the agent on the server goes, and so does the link to it.
+    if ((state.score?.id ?? null) !== scoreSeen) link.leave();
+    showLesson({ state, lead });
+    // The companion is there whenever no lesson is: it is shown the screen too.
+    companion.show({ state, lesson: current(state), lead: Boolean(lead) });
+  }
+
+  function showLesson({ state, lead }) {
     // A lesson is begun by someone, never by opening the page: one left in
     // the workspace from before is ended, quietly, and the piece put back.
     if (opening) {
@@ -181,6 +199,8 @@ export function mountLearning(app, root = document) {
   app.addEventListener("state", (event) => show(event.detail));
   app.addEventListener("reset", () => {
     leave();
+    companion.leave();
+    link.leave();
     scoreSeen = null;
     opening = true;
     if (picking) showPicking(null);
@@ -197,6 +217,7 @@ export function mountLearning(app, root = document) {
     }
     const mode = shown ?? (picking ? modules.get(chosen) : null);
     if (mode?.key(event, { onControl, picking: Boolean(picking) })) return true;
+    if (!mode && companion.key(event, { onControl })) return true;
     if (onControl) return false;
     if (event.key === "l" || event.key === "L") {
       if (picking) showPicking(null);
@@ -217,5 +238,5 @@ export function mountLearning(app, root = document) {
     } else if (event.key === "Escape") showPicking(null);
   });
 
-  return { offerLesson, startPicked, stopLesson: () => shown?.stop(), modules };
+  return { offerLesson, startPicked, stopLesson: () => shown?.stop(), modules, companion };
 }

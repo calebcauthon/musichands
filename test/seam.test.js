@@ -8,15 +8,17 @@ const source = (name) => readFile(new URL(`../${name}`, import.meta.url), "utf8"
 const imports = (text) => [...text.matchAll(/^import .* from "(.+)";$/gm), ...text.matchAll(/^export .* from "(.+)";$/gm)].map((match) => match[1]);
 
 test("learning and its ways use only their own files, the passage arithmetic and the app they are handed", async () => {
-  assert.deepEqual(imports(await source("learning.js")).sort(), ["./learning-drill.js", "./learning-teacher.js", "./lesson.js"]);
-  assert.deepEqual(imports(await source("learning-teacher.js")).sort(), ["./lesson.js", "./speech.js", "./teaching-styles.js"]);
+  assert.deepEqual(imports(await source("learning.js")).sort(), ["./agent-link.js", "./companion.js", "./learning-drill.js", "./learning-teacher.js", "./lesson.js"]);
+  assert.deepEqual(imports(await source("learning-teacher.js")).sort(), ["./lesson.js", "./teaching-styles.js"]);
+  assert.deepEqual(imports(await source("companion.js")).sort(), ["./lesson.js"]);
+  assert.deepEqual(imports(await source("agent-link.js")).sort(), ["./lesson.js", "./speech.js"], "the link to the agent: the voice, the microphone, and the passage arithmetic");
   assert.deepEqual(imports(await source("learning-drill.js")).sort(), ["./drill.js", "./lesson.js"]);
   assert.deepEqual(imports(await source("drill.js")), ["./lesson.js"]);
   assert.deepEqual(imports(await source("lesson.js")).sort(), ["./passage.js", "./teaching-styles.js"]);
   assert.deepEqual(imports(await source("teaching-styles.js")), []);
   assert.deepEqual(imports(await source("speech.js")), []);
   assert.deepEqual(imports(await source("teacher.js")).sort(), ["./corrections.js", "./lesson.js", "./teaching-styles.js"], "the teacher shares the lesson's files with the page, and knows corrections");
-  for (const name of ["learning.js", "learning-teacher.js", "learning-drill.js"]) {
+  for (const name of ["learning.js", "learning-teacher.js", "learning-drill.js", "companion.js", "agent-link.js"]) {
     const code = (await source(name)).replace(/\/\/.*$/gm, ""); // the code, without its comments
     assert.doesNotMatch(code, /\bws\b|\bpage\.|transport|handsView|musichands/, `${name}: nothing of the page's insides`);
   }
