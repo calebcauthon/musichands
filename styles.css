@@ -1779,3 +1779,29 @@ body.full-screen .theater {
     max-width: 60%;
   }
 }
+
+/* The health checks in settings: one line each, its dot green or red. */
+.health-checks {
+  display: grid;
+  gap: var(--space-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sheet-dialog .health-check {
+  align-items: baseline;
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 6px;
+  line-height: 1.4;
+}
+
+.health-check .status-dot {
+  flex: 0 0 auto;
+  transform: translateY(-1px);
+}
+
+.health-check strong {
+  color: var(--ink);
+}

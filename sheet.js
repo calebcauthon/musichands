@@ -708,7 +708,35 @@ function chooseScore({ id, title }) {
 }
 
 scoreTitle.addEventListener("click", () => dialogs.song.showModal());
-document.querySelector("#settings-open").addEventListener("click", () => dialogs.settings.showModal());
+document.querySelector("#settings-open").addEventListener("click", () => {
+  dialogs.settings.showModal();
+  checkHealth();
+});
+
+// The site's health checks, in settings: each a line with a dot that is
+// green when it passes and red when it does not.
+const healthList = document.querySelector("#health-checks");
+const healthLine = ({ name, ok, detail }) => {
+  const line = document.createElement("li");
+  line.className = "live-status health-check";
+  line.dataset.state = ok === undefined ? "idle" : ok ? "correct" : "outside";
+  line.innerHTML = `<span class="status-dot" aria-hidden="true"></span><span><strong></strong> <span class="health-check__detail"></span></span>`;
+  line.querySelector("strong").textContent = ok === undefined ? name : `${name}: ${ok ? "pass" : "fail"}`;
+  line.querySelector(".health-check__detail").textContent = detail;
+  return line;
+};
+async function checkHealth() {
+  healthList.replaceChildren(healthLine({ name: "Checking", detail: "" }));
+  try {
+    const response = await fetch(`${ws?.base ?? ""}/api/health`, { cache: "no-store" });
+    if (!response.ok) throw new Error(`the server answered ${response.status}`);
+    const { checks } = await response.json();
+    healthList.replaceChildren(...checks.map(healthLine));
+  } catch (error) {
+    healthList.replaceChildren(healthLine({ name: "The server", ok: false, detail: `could not be asked: ${error.message}` }));
+  }
+}
+document.querySelector("#health-run").addEventListener("click", checkHealth);
 
 // Turns a PDF of a score into MusicXML. The reader is only fetched when needed.
 async function readPdfScore(file) {
