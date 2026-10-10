@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { applyHandMoves } from "./corrections.js";
 import { assignFingering } from "./fingering.js";
 import { parseScore } from "./score-model.js";
-import { Teacher } from "./teacher.js";
+import { MOST_NOTES, Teacher } from "./teacher.js";
 import { cleanState, COMMANDS, mergeState, projectScreen } from "./workspace-model.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -79,6 +79,10 @@ function readBody(request, limit = MAX_BODY) {
 
 const newId = () => `ws-${randomBytes(8).toString("base64url").replace(/[^a-z0-9]/gi, "").toLowerCase().padEnd(10, "x").slice(0, 10)}`;
 const newToken = () => randomBytes(24).toString("base64url");
+// The person a workspace belongs to: a workspace made afresh gets a new one, a
+// copy keeps its source's. The agent's notes about the person are kept under it.
+const newOwner = () => `p-${randomBytes(9).toString("base64url").replace(/[^a-z0-9]/gi, "").toLowerCase().padEnd(12, "x").slice(0, 12)}`;
+const OWNER = /^p-[a-z0-9]{12}$/;
 
 // Writes a file beside its final name, then moves it in, so a reader never sees half a file.
 async function writeAtomic(file, text) {
@@ -137,6 +141,10 @@ class Workspaces {
         record.state = cleanState(record.state);
         this.settle(record);
       } else await this.bringForward(record);
+      if (!OWNER.test(record.owner ?? "")) {
+        record.owner = newOwner(); // from before workspaces had a person
+        await this.write(record);
+      }
       this.cache.set(id, record);
       return record;
     } catch {
@@ -201,7 +209,7 @@ class Workspaces {
   async create({ name, state, from } = {}) {
     let id = newId();
     while (await this.get(id)) id = newId();
-    const record = { id, name: String(name ?? "").slice(0, 80) || "Workspace", token: newToken(), version: 1, state: cleanState(state), scores: [], created: Date.now(), updated: Date.now() };
+    const record = { id, name: String(name ?? "").slice(0, 80) || "Workspace", token: newToken(), owner: from?.owner ?? newOwner(), version: 1, state: cleanState(state), scores: [], notes: String(from?.notes ?? ""), created: Date.now(), updated: Date.now() };
     if (from) {
       for (const entry of from.scores) {
         await mkdir(path.dirname(this.scoreFile(id, entry.id)), { recursive: true });
@@ -239,6 +247,29 @@ class Workspaces {
     await this.write(record);
     this.broadcast(record, by);
     return record;
+  }
+
+  // The agent's notes: about the person (kept under their id, shared by all
+  // their workspaces) and about the workspace (kept on it).
+  personFile(record) {
+    return path.join(path.dirname(this.dir), "people", `${record.owner}.json`);
+  }
+
+  async readNotes(record) {
+    const person = await readFile(this.personFile(record), "utf8")
+      .then((text) => String(JSON.parse(text).notes ?? ""))
+      .catch(() => "");
+    return { person, workspace: String(record.notes ?? "") };
+  }
+
+  async writeNotes(record, about, text) {
+    const notes = String(text ?? "").trim().slice(0, MOST_NOTES);
+    if (about === "person") await writeAtomic(this.personFile(record), JSON.stringify({ notes, updated: Date.now() }, null, 1));
+    else {
+      record.notes = notes;
+      await this.write(record);
+    }
+    return this.readNotes(record);
   }
 
   async remove(record) {
@@ -338,13 +369,26 @@ export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = 
   return speak;
 }
 
+// Where the model may keep the conversation in its cache: the system prompt,
+// and the whole of it up to the learner's latest words. Models that cache on
+// their own (OpenAI) ignore the marks; Anthropic's need them, or nothing is kept.
+export function cacheMarked(messages) {
+  const lastUser = messages.findLastIndex((message) => message.role === "user");
+  return messages.map((message, index) => {
+    if ((index !== 0 || message.role !== "system") && index !== lastUser) return message;
+    if (typeof message.content !== "string") return message;
+    return { ...message, content: [{ type: "text", text: message.content, cache_control: { type: "ephemeral" } }] };
+  });
+}
+
 // The teacher's mind: a model reached through OpenRouter, which speaks the
 // OpenAI chat-completions dialect with tool calls, so any model there will
 // do; OPENROUTER_MODEL names it. Answers the assistant's message for a
 // conversation and a set of tools, or null if there is no key.
 export function openRouterModel({ key = process.env.OPENROUTER_API_KEY, model = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4.5", url = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions", request = fetch, timeout = 120000, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   if (!key) return null;
-  const ask = async (messages, tools) => {
+  const ask = async (conversation, tools) => {
+    const messages = cacheMarked(conversation);
     for (let attempt = 0; ; attempt += 1) {
       let response;
       try {
@@ -407,7 +451,7 @@ export function healthChecks({ model }) {
   ];
 }
 
-export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", model = openRouterModel(), hear = elevenLabsEars() } = {}) {
+export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", model = openRouterModel(), hear = elevenLabsEars(), stale = Number(process.env.AGENT_CONVERSATION_MS) || undefined } = {}) {
   const workspaces = new Workspaces(dataDir, root);
   // Each line the voice has read is kept under its hash, so a repeat costs
   // nothing. Another voice reads everything afresh.
@@ -438,7 +482,13 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
     const fingered = assignFingering(events, { overrides: record.state.corrections.fingers });
     return { score: parsed, events: fingered.events, positions: fingered.positions, tempo: parsed.tempo ?? 80 };
   };
-  const teacher = model ? new Teacher({ model, music, patch: (record, state) => workspaces.patch(record, { state }, "teacher") }) : null;
+  // The agent: the teacher when a lesson is on, the companion the rest of the time.
+  const screen = async (record) => {
+    const { score, events, positions } = await music(record);
+    return projectScreen(score, events, positions, record.state);
+  };
+  const notes = { read: (record) => workspaces.readNotes(record), write: (record, about, text) => workspaces.writeNotes(record, about, text) };
+  const teacher = model ? new Teacher({ model, music, screen, notes, stale, patch: (record, state, by = "teacher") => workspaces.patch(record, { state }, by) }) : null;
 
   const api = async (request, response) => {
     const url = new URL(request.url, "http://localhost");
@@ -473,7 +523,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(201, { ...connection(record), version: record.version, state: record.state, scores: record.scores });
     }
 
-    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|hear|teacher(?:\/(?:events|say|done))?|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
+    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|hear|notes|teacher(?:\/(?:events|say|done))?|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
     if (!match) return json(404, { error: "Not found" });
     const record = await workspaces.get(match[1]);
     if (!record) return json(404, { error: "No such workspace" });
@@ -583,6 +633,23 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
         return json(502, { error: `The ears could not make that out: ${error.message}` });
       }
     }
+    if (part === "/notes") {
+      // The agent's notes, readable and settable by whoever holds the token.
+      if (request.method === "GET") return json(200, await workspaces.readNotes(record));
+      if (request.method === "PATCH") {
+        let body;
+        try {
+          body = JSON.parse((await readBody(request)).toString("utf8"));
+        } catch {
+          return json(400, { error: "The body must be JSON" });
+        }
+        for (const about of ["person", "workspace"]) if (typeof body?.[about] === "string") await workspaces.writeNotes(record, about, body[about]);
+        const session = teacher?.session(record);
+        if (session) session.notes = await workspaces.readNotes(record); // read at the next conversation
+        return json(200, await workspaces.readNotes(record));
+      }
+      return json(405, { error: "Method not allowed" });
+    }
     if (part.startsWith("/teacher")) {
       if (!teacher) return json(503, { error: "This site has no teacher: set OPENROUTER_API_KEY (and OPENROUTER_MODEL) on the server" });
       const body = async () => {
@@ -597,7 +664,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       if (part === "/teacher" && request.method === "POST") {
         const asked = await body();
         if (!asked) return json(400, { error: "The body must be JSON" });
-        if (teacher.session(record)) return json(409, { error: "A lesson is already under way in this workspace" });
+        if (teacher.lesson(record)) return json(409, { error: "A lesson is already under way in this workspace" });
         try {
           const status = await teacher.start(record, asked);
           return json(201, status);
@@ -605,10 +672,14 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
           return json(400, { error: error.message });
         }
       }
-      if (part === "/teacher" && request.method === "DELETE") return json(200, { stopped: await teacher.stop(record, "stopped") });
+      if (part === "/teacher" && request.method === "DELETE") {
+        // Ends the lesson if one is on; with none on, sends the agent away.
+        if (teacher.lesson(record)) return json(200, { stopped: await teacher.stop(record, "stopped"), lesson: true });
+        return json(200, { stopped: await teacher.dismiss(record, "stopped"), lesson: false });
+      }
       if (part === "/teacher/events" && request.method === "GET") {
         const status = teacher.status(record);
-        if (!status.on) return json(404, { error: "No lesson is under way" });
+        if (!status.on) return json(404, { error: "The agent is not here: nothing has been said to it" });
         response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
         send(response, "status", { status: status.status, ...(status.error ? { error: status.error } : {}) });
         const stop = teacher.watch(record, response);
@@ -622,9 +693,10 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       if (part === "/teacher/say" && request.method === "POST") {
         const asked = await body();
         if (!asked) return json(400, { error: "The body must be JSON" });
-        if (!teacher.session(record)) return json(404, { error: "No lesson is under way" });
+        if (!record.state.score) return json(409, { error: "The workspace has no score open" });
         try {
-          return json(200, teacher.say(record, asked.text));
+          // The first word brings the agent, where the learner is; the rest reach it.
+          return json(200, await teacher.say(record, asked.text));
         } catch (error) {
           return json(400, { error: error.message });
         }
@@ -632,7 +704,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       if (part === "/teacher/done" && request.method === "POST") {
         const asked = await body();
         if (!asked) return json(400, { error: "The body must be JSON" });
-        if (!teacher.session(record)) return json(404, { error: "No lesson is under way" });
+        if (!teacher.session(record)) return json(404, { error: "The agent is not here" });
         return json(200, teacher.done(record, asked.id, asked.result));
       }
       return json(405, { error: "Method not allowed" });
@@ -664,7 +736,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
         return json(200, { version: record.version, state: record.state, name: record.name, scores: record.scores });
       }
       if (request.method === "DELETE") {
-        await teacher?.stop(record, "removed");
+        await teacher?.dismiss(record, "removed");
         await workspaces.remove(record);
         return json(200, { deleted: record.id });
       }

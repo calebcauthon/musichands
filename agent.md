@@ -228,10 +228,39 @@ Write that (with `passage` to the measures, `time` to their start and the
 camera overhead, as for the teacher below) to start one from outside; raise
 `step` to move it on; send `"lesson": null, "passage": null` to stop.
 
-**The teacher** (`mode: "teacher"`) is an agent on the server
-(`teacher.js`) that is handed the music and the screen's tools and talks
-with the learner. It is a model on OpenRouter; a site without
-`OPENROUTER_API_KEY` has no teacher and answers `503` to all of this.
+**The agent** is on the server (`teacher.js`): a model on OpenRouter; a
+site without `OPENROUTER_API_KEY` has none and answers `503` to all of this.
+There is one agent in a workspace, there all the time. It is handed the
+piece, the brief for the measures on screen (where each hand sits and every
+moment it plays, with the fingering as it stands), its notes (below), and
+the screen's tools: say something, place a hand on the keys (`pose`), play
+one moment, play some measures (`passage`, `tempo`, `hands`, `playing`) at a
+tempo a few times or on a loop, pause, listen, look at other measures,
+change a fingering (`corrections.fingers`), give a note to the other hand
+(`corrections.hands`), `see` the screen, change it (`screen`: go to a
+measure or moment, the tempo, the hands, finger numbers, sound, the camera,
+the passage, stop the music, the look of the stage), `remember` a note, and
+`teach` (begin a lesson). Every word said to it comes with a line saying
+what is on the screen as the learner speaks. With no lesson on it answers
+and does what it is asked, and does not teach. The acts that touch the
+screen are performed by the lead browser, which reports each done, so its
+playing really waits for the music to play out.
+
+**Talking to the agent.** `POST /api/workspaces/<id>/teacher/say` with
+`{ "text": "…" }` is the learner speaking: a word typed, the microphone, or
+the Got it button (which sends `"Got it."`). The first word brings the agent
+(`200 { "heard": true, "woke": true }`), where the learner is: nothing on
+the screen changes. If it is listening it hears the word; if something is
+going on — a line being said, the passage playing — that stops, the agent
+is told it was interrupted and what was said, and answers. Anyone with the
+token can do this, so another agent can prompt it on the learner's behalf.
+
+**A lesson** (`mode: "teacher"`) is laid over the same agent and the same
+conversation: it is told how to teach and given a way of teaching, gets
+`focus` and `done` in place of `teach`, and sets the screen up (the passage,
+straight over the hands). When the lesson ends the instructions and the
+tools go again, the piece is put back, and the agent is simply there, with
+everything that was said still in mind.
 
 ```json
 { "mode": "teacher", "from": 2, "to": 5, "style": "hands-separate", "score": "<score id>" }
@@ -244,47 +273,46 @@ speed up).
 
 **Starting a lesson.** `POST /api/workspaces/<id>/teacher` with
 `{ "from": 2, "to": 5, "style": "lead", "said": "I just want to learn this." }`
-(`style` and `said` optional) starts one and answers `201` with its status.
-The teacher sets `lesson`, `passage`, `time` and `camera` itself (straight
-over the hands), so there is nothing else to send. `409` if one is already
-on.
+(`style` and `said` optional) starts one and answers `201` with the agent's
+status. The agent sets `lesson`, `passage`, `time` and `camera` itself, so
+there is nothing else to send. `409` if a lesson is already on.
 
-**What the teacher does.** It is told where each hand sits and every moment
-it plays in the passage, with the fingering as it stands, and it works
-through tools: say something, place a hand on the keys (`pose`), play one
-moment, play the measures (`passage`, `tempo`, `hands`, `playing`) at a tempo
-a few times or on a loop, pause, listen, look at other measures, change a
-fingering (`corrections.fingers`), give a note to the other hand
-(`corrections.hands`), move the lesson to other measures (`lesson`), and end.
-The ones that touch the screen are performed by the lead browser, which
-reports each done — the teacher's playing really waits for the music to play
-out. You can read where it stands from the workspace fields as always.
+**Following along.** `GET /api/workspaces/<id>/teacher` answers `{ "on":
+true, "lesson": { … } | null, "status": "thinking" | "speaking" | "playing"
+| "waiting" | "listening" | "failed", "transcript": [{ "n": 0, "who":
+"teacher" | "learner", "text": "…" }], "acts": [ … ] }` (or `{ "on": false
+}` before the first word). `GET /api/workspaces/<id>/teacher/events?token=<token>&client=<name>`
+is a server-sent-events stream of the same: `said` (a transcript line),
+`status`, `act` (something asked of the screen: `{ "id", "type": "say" |
+"pause" | "place" | "play_moment" | "play", … }`), `cut` (an act cut short),
+`lesson` (`{ "on": true, "lesson" }` as one begins, `{ "on": false, "reason"
+}` as it ends), and `ended` (the agent has gone). A browser that leads
+performs the acts and posts `POST …/teacher/done` with `{ "id", "result" }`;
+if you are driving a workspace no browser is open on, acts wait ten minutes
+for a screen and then answer the agent that none was there.
 
-**Talking to the teacher.** `POST /api/workspaces/<id>/teacher/say` with
-`{ "text": "…" }` is the learner speaking: a word typed, the microphone, or
-the Got it button (which sends `"Got it."`). If the teacher is listening it
-hears it; if something is going on — a line being said, the passage playing
-— that stops, the teacher is told it was interrupted and what was said, and
-answers. Anyone with the token can do this, so another agent can prompt the
-teacher on the learner's behalf.
+**Stopping.** `DELETE /api/workspaces/<id>/teacher` ends the lesson if one
+is on and puts the piece back (`lesson`, `passage`, `tempo`, `hands`, `pose`
+to none), answering `{ "stopped": true, "lesson": true }`; the agent stays.
+So does sending `"lesson": null` or opening the page on a workspace with a
+lesson left in it. With no lesson on, the same call sends the agent away
+(`{ "stopped": true, "lesson": false }`), leaving the screen as it is. Opening
+another piece sends it away too, lesson and all.
 
-**Following along.** `GET /api/workspaces/<id>/teacher` answers
-`{ "on": true, "lesson": …, "status": "thinking" | "speaking" | "playing" |
-"waiting" | "listening" | "failed", "transcript": [{ "n": 0, "who":
-"teacher" | "learner", "text": "…" }], "acts": [ … ] }` (or `{ "on": false }`).
-`GET /api/workspaces/<id>/teacher/events?token=<token>&client=<name>` is a
-server-sent-events stream of the same: `said` (a transcript line), `status`,
-`act` (something asked of the screen: `{ "id", "type": "say" | "pause" |
-"place" | "play_moment" | "play", … }`), `cut` (an act cut short), and
-`ended`. A browser that leads performs the acts and posts
-`POST …/teacher/done` with `{ "id", "result" }`; if you are driving a
-workspace no browser is open on, acts wait ten minutes for a screen and then
-answer the teacher that none was there.
-
-**Stopping.** `DELETE /api/workspaces/<id>/teacher` ends the lesson and puts
-the piece back (`lesson`, `passage`, `tempo`, `hands`, `pose` to none). So
-does sending `"lesson": null`, opening another piece, or opening the page on
-a workspace with a lesson left in it.
+**The conversation and the notes.** The conversation is kept only while it
+is warm: a call to the model that would come more than five minutes after
+the last reply (`AGENT_CONVERSATION_MS` on the server to change it) finds
+nothing of it in the model's cache, so it is not sent again; the agent
+starts afresh from its instructions and whatever was said since, told that
+the earlier talk was lost. The lesson, if one is on, and the transcript stay.
+What lasts is the agent's notes, which it writes with `remember`: about the
+**person** (how they like to be talked to, what they are working towards,
+what comes hard), kept under the person the workspace belongs to and shared
+by every workspace they copy from it, and about the **workspace** (the
+piece, the fingering they settled on, where they left off). Both go into
+every new conversation. `GET /api/workspaces/<id>/notes` answers `{ "person":
+"…", "workspace": "…" }` and `PATCH` with either field (text, up to 1500
+characters) sets it; the agent reads the change at its next conversation.
 
 `POST /api/workspaces/<id>/speech` with `{ "text": "…" }` answers that text
 read aloud as MP3, from the voice the site is set up with (up to 1500

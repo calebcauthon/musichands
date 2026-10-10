@@ -115,6 +115,15 @@
               <button class="button" type="button" id="drill-stop" title="Stop the drill and keep the piece as it was">Stop</button>
             </div>
           </section>
+          <!-- The companion: the agent, there whenever no lesson is. The last few things said, and a line to say something. -->
+          <section class="lesson lesson--companion" id="companion" hidden aria-label="The agent">
+            <div class="lesson__transcript" id="companion-transcript" aria-live="polite"></div>
+            <p class="lesson__status" id="companion-status"></p>
+            <form class="lesson__say" id="companion-say">
+              <input class="lesson__input" id="companion-input" type="text" placeholder="Ask the agent, or tell it what to do…" autocomplete="off" />
+              <button class="button lesson-mic" type="button" id="companion-mic" title="Hold to speak (hold V)" aria-label="Hold to speak">🎤</button>
+            </form>
+          </section>
           <div class="hand-choice" role="group" aria-label="Which hands to see and hear">
             <button class="button" type="button" data-hands="left" aria-pressed="false" title="See and hear the left hand on its own">Left hand only</button>
             <button class="button" type="button" data-hands="both" aria-pressed="true" title="See and hear both hands">Both hands</button>
@@ -169,7 +178,7 @@
           </label>
           <p class="sheet-dialog__hint">Full is the cinematic look; Balanced drops the depth of field; Light draws without shadows and is easiest on the computer. Until you choose, the stage steps down on its own when frames fall behind.</p>
           <h3 class="sheet-dialog__section">Agents</h3>
-          <p class="sheet-dialog__hint">An agent with the connection string sees what you see and can change it: the moment, the tempo, the camera, the fingering.</p>
+          <p class="sheet-dialog__hint">An agent with the connection string sees what you see and can change it: the moment, the tempo, the camera, the fingering. The one in the box at the bottom left of the piano has the same powers, and talks.</p>
           <div class="sheet-dialog__actions">
             <button class="button button--primary" type="button" id="workspace-connect" title="Copy everything an agent needs to see and change this screen">Copy agent connection string</button>
             <a class="button" href="./agent.md" target="_blank" rel="noopener">Agent manual</a>
@@ -184,7 +193,7 @@
           <div id="staff-legend" class="staff-legend" aria-label="Line colours by note name"></div>
           <p class="sheet-dialog__hint">Faint lines mark the first two ledger lines under each staff: C and A below the treble, E and C below the bass.</p>
           <h3 class="sheet-dialog__section">Keys</h3>
-          <p class="sheet-dialog__hint">← and → move through the piece, Home and End go to its ends, P plays it, Space hears the moment again (Shift for one finger at a time), N shows or hides the finger numbers, F is full screen, L starts a lesson and G is “Got it”. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a measure to go there.</p>
+          <p class="sheet-dialog__hint">← and → move through the piece, Home and End go to its ends, P plays it, Space hears the moment again (Shift for one finger at a time), N shows or hides the finger numbers, F is full screen, L starts a lesson, G is “Got it” and V held down is the microphone, for the agent or the teacher. Drag the piano to turn the camera, 1 to 9 for your saved views, C for auto cut. Click a key to play it, or a measure to go there.</p>
         </form>
       </dialog>
     </main>
