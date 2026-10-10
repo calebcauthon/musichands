@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { createAppServer, resolveFile, serve } from "../server.js";
+import { createAppServer, healthChecks, openRouterModel, resolveFile, serve } from "../server.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -54,4 +54,25 @@ test("asked to find a port, the server takes the next free one", async () => {
     await new Promise((resolve) => server.close(resolve));
     await new Promise((resolve) => taken.close(resolve));
   }
+});
+
+test("the health checks say whether the LLM key is set, and never the key", async () => {
+  const fake = Object.assign(async () => ({}), { label: "openrouter/some-model" });
+  for (const [model, ok] of [[null, false], [fake, true]]) {
+    const server = createAppServer(undefined, { model, speak: null, hear: null });
+    await new Promise((resolve) => server.listen(0, resolve));
+    try {
+      const response = await fetch(`http://localhost:${server.address().port}/api/health`);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.ok, ok);
+      const key = body.checks.find((check) => check.id === "llm-key");
+      assert.equal(key.ok, ok);
+      assert.match(key.detail, ok ? /is set; the teacher is openrouter\/some-model/ : /not set/);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }
+  const real = openRouterModel({ key: "sk-or-secret" });
+  assert.doesNotMatch(JSON.stringify(healthChecks({ model: real })), /sk-or-secret/);
 });

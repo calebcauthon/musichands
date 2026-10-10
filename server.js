@@ -394,6 +394,19 @@ export function elevenLabsEars({ key = process.env.ELEVENLABS_API_KEY, model = p
   return hear;
 }
 
+// The site's health: what it needs to work, each checked and told plainly.
+// Never says a key, only whether there is one.
+export function healthChecks({ model }) {
+  return [
+    {
+      id: "llm-key",
+      name: "LLM API key",
+      ok: Boolean(model),
+      detail: model ? `OPENROUTER_API_KEY is set${model.label ? `; the teacher is ${model.label}` : ""}` :"OPENROUTER_API_KEY is not set on the server, so there is no teacher",
+    },
+  ];
+}
+
 export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", model = openRouterModel(), hear = elevenLabsEars() } = {}) {
   const workspaces = new Workspaces(dataDir, root);
   // Each line the voice has read is kept under its hash, so a repeat costs
@@ -435,6 +448,11 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
     };
     const site = publicUrl || `${request.headers["x-forwarded-proto"] ?? "http"}://${request.headers.host}`;
     const connection = (record) => ({ id: record.id, name: record.name, token: record.token, url: `${site}/#ws=${record.id}&token=${record.token}`, api: `${site}/api/workspaces/${record.id}`, manual: `${site}/agent.md`, connectionString: `MusicHands workspace "${record.name}"\nURL: ${site}\nWorkspace: ${record.id}\nToken: ${record.token}\nManual: ${site}/agent.md` });
+
+    if (url.pathname === "/api/health" && request.method === "GET") {
+      const checks = healthChecks({ model });
+      return json(200, { ok: checks.every((check) => check.ok), checks });
+    }
 
     if (url.pathname === "/api/workspaces" && request.method === "POST") {
       let body = {};
