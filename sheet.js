@@ -1343,7 +1343,11 @@ window.addEventListener("hashchange", () => {
 //     togglePlaying()     what the Play button does
 //     playMoment(time)    shows and sounds one moment of the piece
 //   The page
+//     site                what the site can do: { voice, teacher, ears }
 //     speech(text)        that text read aloud, as a Blob; null if the site has no voice
+//     hear(audio)         a recording of someone speaking (a Blob) as words; null if the site has no ears
+//     teacher             the teacher on the server (teacher.js): start(body), status(), say(text),
+//                         done(id, result), stop(), and events(handler) → stop, which streams what it does
 //     tint(range)         tints measures { from, to, strong } in the notation; null to stop
 //     onMeasure(hook)     takes measure clicks and hovers: { click(index) → true if taken, hover(index) }; null to give them back
 //     onKey(handler)      is offered each shortcut key first: handler(event, { onControl }) → true if taken
@@ -1369,6 +1373,36 @@ const app = Object.assign(new EventTarget(), {
     if (!response.ok) throw new Error(`the voice answered ${response.status}`);
     return response.blob();
   },
+  async hear(audio) {
+    if (!ws) return null;
+    const response = await fetch(`${ws.base}/api${ws.path}/hear`, { method: "POST", headers: { "content-type": audio.type || "audio/webm", authorization: `Bearer ${ws.token}` }, body: audio });
+    if (response.status === 503) return null;
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error ?? `the ears answered ${response.status}`);
+    return body.text ?? "";
+  },
+  teacher: {
+    async call(method, part = "", body = undefined) {
+      if (!ws) throw new Error("no workspace");
+      const response = await fetch(`${ws.base}/api${ws.path}/teacher${part}`, { method, headers: { "content-type": "application/json", authorization: `Bearer ${ws.token}`, "x-client": ws.client }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const answer = await response.json().catch(() => ({}));
+      if (!response.ok) throw Object.assign(new Error(answer.error ?? `the teacher answered ${response.status}`), { status: response.status });
+      return answer;
+    },
+    start: (body) => app.teacher.call("POST", "", body),
+    status: () => app.teacher.call("GET"),
+    say: (text) => app.teacher.call("POST", "/say", { text }),
+    done: (id, result) => app.teacher.call("POST", "/done", { id, result }),
+    stop: () => app.teacher.call("DELETE"),
+    // Streams the teacher's events to handler(event, data); the stop it answers closes it.
+    events(handler) {
+      if (!ws) return () => {};
+      const source = new EventSource(`${ws.base}/api${ws.path}/teacher/events?token=${encodeURIComponent(ws.token)}&client=${encodeURIComponent(ws.client)}`);
+      for (const event of ["act", "cut", "said", "status", "ended"]) source.addEventListener(event, (message) => handler(event, JSON.parse(message.data)));
+      source.onerror = () => handler("error", {});
+      return () => source.close();
+    },
+  },
   tint(range) {
     page.tint = range;
     drawTint();
@@ -1382,6 +1416,7 @@ const app = Object.assign(new EventTarget(), {
 });
 Object.defineProperties(app, {
   state: { get: () => ws?.state ?? null },
+  site: { get: () => ws?.info?.site ?? {} },
   score: { get: () => page.score },
   events: { get: () => page.events },
   positions: { get: () => page.positions },
@@ -1394,7 +1429,5 @@ Object.defineProperties(app, {
     },
   },
 });
-mountLearning(app);
-
-window.musichands = { page, app, view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
+window.musichands = { page, app, learning: mountLearning(app), view: handsView, playPassage, clearPassage, get workspace() { return ws; } };
 await openFirstWorkspace();

@@ -92,9 +92,9 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `corrections.fingers` | `{ "<moment>": { "<hand>": { "<note>": <finger 1–5> } } }`. Overrides the score's and the app's fingering at that moment. See "Corrections". |
 | `corrections.hands` | `{ "<moment>": { "<note>": "left" \| "right" } }`. Gives a note to the other hand at that moment. |
 | `command` | The last command posted, `{ seq, type, by }`. Read-only in practice; use `POST .../commands`. |
-| `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`. Measure indexes count from 0. See "Playing a passage". |
+| `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`, with optional `"start"` and `"end"` (quarter notes from the beginning of the piece) to keep it to part of those measures. Measure indexes count from 0. See "Playing a passage". |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
-| `lesson` | The learning module's own record of the lesson under way, or `null`. The workspace stores it as given and does not read it; the page's learning module does. See "Lessons". |
+| `lesson` | The lesson under way, or `null`: `{ mode, from, to, score, … }`. The workspace stores it as given; the page's learning modules and the teacher read it. See "Lessons". |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -184,7 +184,9 @@ Each go starts on the beat the last one ended on. After the last, `playing`
 goes false; with `"times": null` it loops until stopped. The measures are
 tinted in the notation. While `passage` is set, Play plays it again; send
 `"passage": null` to give Play the whole piece back. `hands` chooses which
-hand is seen and heard, as always. A lesson works through this same field.
+hand is seen and heard, as always. Add `"end": 18` (or `"start"`) to play
+only part of the measures: up to beat 18 of the piece, say. Send `"end":
+null` to have the whole of them again. A lesson works through this same field.
 
 ## Posing a hand
 
@@ -207,43 +209,97 @@ curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
 
 ## Lessons
 
-Learning is a module on the page (`learning.js`). It works the page only
-through the fields in this manual — `tempo`, `hands`, `time`, `camera`,
-`pose`, `passage`, `playing` — and keeps one thing of its own in the
-workspace: `lesson`, which the server stores as given and never reads. As
-the module is now, a lesson is
+Learning is a module on the page (`learning.js`) with two ways of learning
+a passage, each a module of its own. The lesson under way is kept in the
+workspace as `lesson`, which the page's modules (and the teacher) read and
+the server itself does not; `mode` says whose it is, `from` and `to` are
+measure indexes from 0, `score` the piece.
+
+**The drill** (`mode: "drill"`) is rigid and silent and needs nothing from
+the server: the lead browser goes through a fixed list of steps (each hand
+placed and held, then played slowly four times, faster twice, at tempo
+twice; then the other hand; then both), keeping its place in `step`:
 
 ```json
-{ "from": 2, "to": 5, "stage": "right", "phase": "intro", "score": "<score id>" }
+{ "mode": "drill", "from": 2, "to": 5, "step": 0, "score": "<score id>" }
 ```
 
-`from` and `to` are measure indexes from 0; `stage` is `right`, `left` or
-`both`; `phase` is `intro` (the whole passage, both hands, once, at nine
-tenths of the score's tempo, after which the page moves on by itself),
-`position` (the voice places the hand a finger at a time, writing `pose`),
-`show` (the notes named, the hand playing each, then the passage played twice
-to watch), `once` (the passage once, slowly, for the person to play along) or
-`ramp` (the passage looping, three beats a minute faster at each "got it"
-until the score's own tempo). The shape may change with the module; treat it
-as the module's, not as an API.
+Write that (with `passage` to the measures, `time` to their start and the
+camera overhead, as for the teacher below) to start one from outside; raise
+`step` to move it on; send `"lesson": null, "passage": null` to stop.
 
-At each phase the module sets `passage` to the lesson's measures and how many
-times the phase plays them, `hands` to the hand being learnt, `time` to the
-start of the passage and `tempo` to the practice tempo, so you can read where
-a lesson stands from those. To start a lesson from outside, write what the
-page writes:
+**The teacher** (`mode: "teacher"`) is an agent on the server
+(`teacher.js`) that is handed the music and the screen's tools and talks
+with the learner. It is a model on OpenRouter; a site without
+`OPENROUTER_API_KEY` has no teacher and answers `503` to all of this.
 
 ```json
-{ "lesson": { "from": 2, "to": 5, "stage": "right", "phase": "intro", "score": "<score id>" }, "passage": { "from": 2, "to": 5, "times": 1 }, "time": 8, "tempo": 108, "hands": { "left": { "show": true, "sound": true }, "right": { "show": true, "sound": true } }, "camera": { "view": { "azimuth": 0, "elevation": 87, "zoom": 1.35 }, "autoCut": false }, "playing": false }
+{ "mode": "teacher", "from": 2, "to": 5, "style": "hands-separate", "score": "<score id>" }
 ```
 
-The lead browser talks each phase through and, in a phase that plays, starts
-playing. Send `"lesson": null, "passage": null` to stop. A lesson on a piece
-that is no longer the one open is dropped by the page.
+`style` is a way of teaching: `lead` (the teacher decides),
+`hands-separate` (right hand, then left, then both, slowly and then up to
+tempo), `one-thing` (one spot drilled) or `play-along` (few words, loop and
+speed up).
+
+**Starting a lesson.** `POST /api/workspaces/<id>/teacher` with
+`{ "from": 2, "to": 5, "style": "lead", "said": "I just want to learn this." }`
+(`style` and `said` optional) starts one and answers `201` with its status.
+The teacher sets `lesson`, `passage`, `time` and `camera` itself (straight
+over the hands), so there is nothing else to send. `409` if one is already
+on.
+
+**What the teacher does.** It is told where each hand sits and every moment
+it plays in the passage, with the fingering as it stands, and it works
+through tools: say something, place a hand on the keys (`pose`), play one
+moment, play the measures (`passage`, `tempo`, `hands`, `playing`) at a tempo
+a few times or on a loop, pause, listen, look at other measures, change a
+fingering (`corrections.fingers`), give a note to the other hand
+(`corrections.hands`), move the lesson to other measures (`lesson`), and end.
+The ones that touch the screen are performed by the lead browser, which
+reports each done — the teacher's playing really waits for the music to play
+out. You can read where it stands from the workspace fields as always.
+
+**Talking to the teacher.** `POST /api/workspaces/<id>/teacher/say` with
+`{ "text": "…" }` is the learner speaking: a word typed, the microphone, or
+the Got it button (which sends `"Got it."`). If the teacher is listening it
+hears it; if something is going on — a line being said, the passage playing
+— that stops, the teacher is told it was interrupted and what was said, and
+answers. Anyone with the token can do this, so another agent can prompt the
+teacher on the learner's behalf.
+
+**Following along.** `GET /api/workspaces/<id>/teacher` answers
+`{ "on": true, "lesson": …, "status": "thinking" | "speaking" | "playing" |
+"waiting" | "listening" | "failed", "transcript": [{ "n": 0, "who":
+"teacher" | "learner", "text": "…" }], "acts": [ … ] }` (or `{ "on": false }`).
+`GET /api/workspaces/<id>/teacher/events?token=<token>&client=<name>` is a
+server-sent-events stream of the same: `said` (a transcript line), `status`,
+`act` (something asked of the screen: `{ "id", "type": "say" | "pause" |
+"place" | "play_moment" | "play", … }`), `cut` (an act cut short), and
+`ended`. A browser that leads performs the acts and posts
+`POST …/teacher/done` with `{ "id", "result" }`; if you are driving a
+workspace no browser is open on, acts wait ten minutes for a screen and then
+answer the teacher that none was there.
+
+**Stopping.** `DELETE /api/workspaces/<id>/teacher` ends the lesson and puts
+the piece back (`lesson`, `passage`, `tempo`, `hands`, `pose` to none). So
+does sending `"lesson": null`, opening another piece, or opening the page on
+a workspace with a lesson left in it.
 
 `POST /api/workspaces/<id>/speech` with `{ "text": "…" }` answers that text
 read aloud as MP3, from the voice the site is set up with (up to 1500
-characters; `503` when the site has no voice). The page uses it for lessons.
+characters; `503` when the site has no voice). The voice is ElevenLabs'
+Eleven v4, so the text may carry directions for the delivery in square
+brackets: `"[gently] Thumb on A."`. The page uses it for lessons.
+
+`POST /api/workspaces/<id>/hear` with a recording as the body (`content-type`
+its kind, `audio/webm` say) answers `{ "text": "…" }`: what was said, by the
+ears the site is set up with (ElevenLabs speech-to-text; `503` when it has
+none). The page's microphone goes through it.
+
+The workspace document (`GET /api/workspaces/<id>`) carries
+`"site": { "voice": true, "teacher": true, "ears": true }` saying which of
+these the site has.
 
 ## Changing the workspace
 

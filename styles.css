@@ -1289,12 +1289,16 @@ kbd {
   bottom: 52px;
   left: var(--space-sm);
   z-index: 3;
-  width: min(24rem, 46%);
-  padding: 10px 12px 12px;
-  border: 1px solid oklch(95% 0.03 84 / 0.35);
+  display: flex;
+  flex-direction: column;
+  width: min(32rem, 58%);
+  max-height: calc(100% - 110px); /* never over the stage's own Play and tempo */
+  padding: 14px 16px 16px;
+  border: 2px solid #e9a63a;
   color: oklch(95% 0.03 84);
-  background: oklch(18% 0.02 50 / 0.82);
-  backdrop-filter: blur(6px);
+  background: oklch(16% 0.02 50 / 0.9);
+  box-shadow: 0 18px 40px -16px oklch(10% 0.02 50 / 0.9), 0 0 0 1px oklch(10% 0.02 50 / 0.6);
+  backdrop-filter: blur(8px);
 }
 
 .lesson[hidden] {
@@ -1302,12 +1306,19 @@ kbd {
 }
 
 .lesson p {
+  flex: none;
   margin: 0;
+}
+
+.lesson__transport,
+.lesson__say,
+.lesson__actions {
+  flex: none;
 }
 
 .lesson__kicker {
   color: #e9a63a;
-  font-size: 0.68rem;
+  font-size: 0.74rem;
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -1316,20 +1327,115 @@ kbd {
 .lesson__progress {
   margin-top: 2px;
   font-family: var(--display);
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   font-style: italic;
 }
 
-.lesson__caption {
-  margin-top: 6px;
-  max-height: 7.5em;
+/* What has been said, the teacher's lines and the learner's, the last few. */
+.lesson__transcript {
+  flex: 1 1 auto;
+  min-height: 2.9em;
+  margin-top: 8px;
+  max-height: 11em;
   overflow-y: auto;
-  color: oklch(95% 0.03 84 / 0.82);
-  font-size: 0.8rem;
+  font-size: 0.92rem;
   line-height: 1.45;
 }
 
-.lesson__caption:empty {
+.lesson__transcript:empty {
+  display: none;
+}
+
+.lesson__line {
+  color: oklch(95% 0.03 84 / 0.82);
+}
+
+.lesson__line + .lesson__line {
+  margin-top: 4px;
+}
+
+.lesson__line:last-child {
+  color: oklch(98% 0.02 84);
+  font-size: 1.02rem;
+}
+
+.lesson__line--learner {
+  color: #e9a63a;
+}
+
+.lesson__line--learner::before {
+  content: "You: ";
+  font-weight: 600;
+}
+
+.lesson__status {
+  margin-top: 6px;
+  min-height: 1.2em;
+  color: oklch(95% 0.03 84 / 0.65);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+/* The music under the learner's hand: pause, back a little, from the top. */
+.lesson__transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: 8px;
+}
+
+.lesson__transport .button {
+  min-height: 30px;
+  padding: 0 10px;
+  border-color: oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.72);
+  font-size: 0.76rem;
+}
+
+.lesson__transport .button[aria-pressed="true"] {
+  border-color: #e9a63a;
+  color: #e9a63a;
+}
+
+.lesson__say {
+  display: flex;
+  gap: var(--space-xs);
+  margin-top: 8px;
+}
+
+.lesson__input {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid oklch(95% 0.03 84 / 0.45);
+  color: oklch(95% 0.03 84);
+  background: oklch(18% 0.02 50 / 0.72);
+  font: inherit;
+  font-size: 0.9rem;
+}
+
+.lesson__input::placeholder {
+  color: oklch(95% 0.03 84 / 0.5);
+}
+
+/* The microphone: held down to speak. */
+.lesson-mic {
+  min-height: 36px;
+  padding: 0 10px;
+  font-size: 0.95rem;
+  user-select: none;
+  touch-action: none;
+}
+
+.lesson-mic[aria-pressed="true"] {
+  border-color: #d64545;
+  color: white;
+  background: #d64545;
+}
+
+.lesson-mic[hidden] {
   display: none;
 }
 
@@ -1340,23 +1446,13 @@ kbd {
   margin-top: 10px;
 }
 
-.lesson__actions--passage {
-  margin-top: 8px;
-}
-
-.lesson__actions--passage .button {
-  min-height: 28px;
-  padding: 0 9px;
-  font-size: 0.72rem;
-}
-
 .lesson__actions .button {
-  min-height: 32px;
-  padding: 0 12px;
+  min-height: 36px;
+  padding: 0 14px;
   border-color: oklch(95% 0.03 84 / 0.45);
   color: oklch(95% 0.03 84);
   background: oklch(18% 0.02 50 / 0.72);
-  font-size: 0.78rem;
+  font-size: 0.86rem;
 }
 
 .lesson__actions .button--primary {
@@ -1398,6 +1494,77 @@ kbd {
 .lesson-pick .button {
   min-height: 32px;
   padding: 0 12px;
+}
+
+.lesson-pick__text {
+  flex-basis: 100%;
+}
+
+.lesson-pick__style {
+  flex: 0 0 auto;
+  width: auto;
+  max-width: 20rem;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.lesson-pick__said {
+  display: flex;
+  gap: 4px;
+}
+
+/* The ways of learning, one pressed. */
+.lesson-pick__modes {
+  display: flex;
+  gap: 0;
+}
+
+.lesson-pick__modes .button {
+  min-height: 32px;
+  padding: 0 12px;
+}
+
+.lesson-pick__modes .button + .button {
+  margin-left: -1px;
+}
+
+.lesson-pick__modes .button[aria-pressed="true"] {
+  color: var(--paper);
+  background: var(--ink);
+}
+
+.lesson-pick__options {
+  display: contents;
+}
+
+.lesson-pick__options[hidden] {
+  display: none;
+}
+
+.lesson-pick__note {
+  align-self: center;
+  color: oklch(40% 0.03 60);
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.lesson-pick__input {
+  width: 14rem;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.lesson-pick {
+  flex-wrap: wrap;
+  max-width: calc(100% - 2 * var(--space-sm));
 }
 
 body.picking-lesson .score-container {

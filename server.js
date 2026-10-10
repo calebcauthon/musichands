@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { applyHandMoves } from "./corrections.js";
 import { assignFingering } from "./fingering.js";
 import { parseScore } from "./score-model.js";
+import { Teacher } from "./teacher.js";
 import { cleanState, COMMANDS, mergeState, projectScreen } from "./workspace-model.js";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
@@ -37,7 +38,7 @@ const TYPES = {
   ".ico": "image/x-icon",
 };
 // Scores are private too: a piece is only reached through a workspace that holds a copy.
-const PRIVATE = new Set(["test", "node_modules", "private", "data", "scores", "server.js", "Makefile", "package.json", "package-lock.json"]);
+const PRIVATE = new Set(["test", "node_modules", "private", "data", "scores", "server.js", "teacher.js", "Makefile", "package.json", "package-lock.json"]);
 // Sounds and the hand model never change; pages and scripts should stay fresh.
 const LONG_LIVED = new Set([".mp3", ".glb"]);
 // The file a request path names, or null if it is not one the app serves.
@@ -295,20 +296,105 @@ const bearer = (request, url) => request.headers.authorization?.replace(/^Bearer
 
 // The voice that reads lessons aloud: ElevenLabs, with the key kept here so
 // the page never sees it. Answers the MP3 for a text, or null if there is no key.
-export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM", model = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5" } = {}) {
+// The model is Eleven v4, which takes directions for the delivery in square
+// brackets inside the text ("[warmly] Thumb on A.").
+export function elevenLabsVoice({ key = process.env.ELEVENLABS_API_KEY, voice = process.env.ELEVENLABS_VOICE_ID || "21m00Tcm4TlvDq8ikWAM", model = process.env.ELEVENLABS_MODEL_ID || "eleven_v4", concurrency = Number(process.env.ELEVENLABS_CONCURRENCY) || 2, request = fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
   if (!key) return null;
-  return async (text) => {
-    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_64`, {
-      method: "POST",
-      headers: { "xi-api-key": key, "content-type": "application/json", accept: "audio/mpeg" },
-      body: JSON.stringify({ text, model_id: model }),
-    });
-    if (!response.ok) throw new Error(`the voice answered ${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
+  const read = async (text) => {
+    // A plan allows only so many readings at once; one refused for that is asked for again shortly.
+    for (let attempt = 0; ; attempt += 1) {
+      const response = await request(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_64`, {
+        method: "POST",
+        headers: { "xi-api-key": key, "content-type": "application/json", accept: "audio/mpeg" },
+        body: JSON.stringify({ text, model_id: model }),
+      });
+      if (response.ok) return Buffer.from(await response.arrayBuffer());
+      if (response.status !== 429 || attempt >= 5) throw new Error(`the voice answered ${response.status}`);
+      await wait(400 * (attempt + 1));
+    }
   };
+  // Lines are read a few at a time, in the order they were asked for: a
+  // lesson asks for a whole phase at once, and speaks it a line at a time.
+  let reading = 0;
+  const waiting = [];
+  const next = () => {
+    while (reading < concurrency && waiting.length) {
+      const { text, resolve, reject } = waiting.shift();
+      reading += 1;
+      read(text)
+        .then(resolve, reject)
+        .finally(() => {
+          reading -= 1;
+          next();
+        });
+    }
+  };
+  const speak = (text) =>
+    new Promise((resolve, reject) => {
+      waiting.push({ text, resolve, reject });
+      next();
+    });
+  speak.label = `${voice}/${model}`; // what a kept recording is a recording of
+  return speak;
 }
 
-export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = `${process.env.ELEVENLABS_VOICE_ID ?? ""}/${process.env.ELEVENLABS_MODEL_ID ?? ""}` } = {}) {
+// The teacher's mind: a model reached through OpenRouter, which speaks the
+// OpenAI chat-completions dialect with tool calls, so any model there will
+// do; OPENROUTER_MODEL names it. Answers the assistant's message for a
+// conversation and a set of tools, or null if there is no key.
+export function openRouterModel({ key = process.env.OPENROUTER_API_KEY, model = process.env.OPENROUTER_MODEL || "anthropic/claude-sonnet-4.5", url = process.env.OPENROUTER_URL || "https://openrouter.ai/api/v1/chat/completions", request = fetch, timeout = 120000, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  if (!key) return null;
+  const ask = async (messages, tools) => {
+    for (let attempt = 0; ; attempt += 1) {
+      let response;
+      try {
+        response = await request(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "http-referer": "https://github.com/calebcauthon/musichands", "x-title": "MusicHands" },
+          body: JSON.stringify({ model, messages, tools, tool_choice: "auto" }),
+          signal: AbortSignal.timeout(timeout),
+        });
+      } catch (error) {
+        if (attempt >= 1) throw new Error(`the teacher could not be reached: ${error.message}`);
+        await wait(1000);
+        continue;
+      }
+      if (response.ok) {
+        const body = await response.json();
+        const message = body?.choices?.[0]?.message;
+        if (!message) throw new Error(`the teacher answered nothing usable${body?.error?.message ? `: ${body.error.message}` : ""}`);
+        return message;
+      }
+      const text = await response.text().catch(() => "");
+      if ((response.status === 429 || response.status >= 500) && attempt < 1) {
+        await wait(2000);
+        continue;
+      }
+      throw new Error(`the teacher answered ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+    }
+  };
+  ask.label = `openrouter/${model}`;
+  return ask;
+}
+
+// The ears: ElevenLabs speech-to-text, which turns a recording of the
+// learner into words. Answers the text, or null if there is no key.
+export function elevenLabsEars({ key = process.env.ELEVENLABS_API_KEY, model = process.env.ELEVENLABS_STT_MODEL_ID || "scribe_v1", request = fetch } = {}) {
+  if (!key) return null;
+  const hear = async (audio, mime = "audio/webm") => {
+    const form = new FormData();
+    form.append("model_id", model);
+    form.append("file", new Blob([audio], { type: mime }), `speech.${mime.split("/")[1]?.split(";")[0] || "webm"}`);
+    const response = await request("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": key }, body: form });
+    if (!response.ok) throw new Error(`the ears answered ${response.status}`);
+    const body = await response.json();
+    return String(body?.text ?? "").trim();
+  };
+  hear.label = model;
+  return hear;
+}
+
+export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ?? path.join(root, "data"), publicUrl = process.env.PUBLIC_URL ?? "", speak = elevenLabsVoice(), voiceName = speak?.label ?? "", model = openRouterModel(), hear = elevenLabsEars() } = {}) {
   const workspaces = new Workspaces(dataDir, root);
   // Each line the voice has read is kept under its hash, so a repeat costs
   // nothing. Another voice reads everything afresh.
@@ -323,6 +409,23 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
     response.writeHead(200, { "content-type": "application/vnd.recordare.musicxml+xml; charset=utf-8", "cache-control": "no-store" });
     response.end(xml);
   };
+
+  // The piece a workspace has open, read and fingered as the page has it,
+  // corrections and all. A piece is read once and kept for a while.
+  const parsedScores = new Map(); // score id → parsed
+  const music = async (record) => {
+    const xml = await scoreText(record);
+    const id = record.state.score.id;
+    if (!parsedScores.has(id)) {
+      parsedScores.set(id, parseScore(xml));
+      if (parsedScores.size > 8) parsedScores.delete(parsedScores.keys().next().value);
+    }
+    const parsed = parsedScores.get(id);
+    const events = applyHandMoves(parsed.events, record.state.corrections.hands);
+    const fingered = assignFingering(events, { overrides: record.state.corrections.fingers });
+    return { score: parsed, events: fingered.events, positions: fingered.positions, tempo: parsed.tempo ?? 80 };
+  };
+  const teacher = model ? new Teacher({ model, music, patch: (record, state) => workspaces.patch(record, { state }, "teacher") }) : null;
 
   const api = async (request, response) => {
     const url = new URL(request.url, "http://localhost");
@@ -352,7 +455,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(201, { ...connection(record), version: record.version, state: record.state, scores: record.scores });
     }
 
-    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
+    const match = url.pathname.match(/^\/api\/workspaces\/(ws-[a-z0-9]{10})(\/(?:events|screen|score|commands|lead|speech|hear|teacher(?:\/(?:events|say|done))?|scores(?:\/[0-9a-f]{64}(?:\/summary)?)?))?$/);
     if (!match) return json(404, { error: "Not found" });
     const record = await workspaces.get(match[1]);
     if (!record) return json(404, { error: "No such workspace" });
@@ -372,16 +475,9 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return null;
     }
     if (part === "/screen" && request.method === "GET") {
-      let xml;
-      try {
-        xml = await scoreText(record);
-      } catch {
-        return json(409, { error: "The workspace has no score open" });
-      }
-      const parsed = parseScore(xml);
-      const events = applyHandMoves(parsed.events, record.state.corrections.hands);
-      const fingered = assignFingering(events, { overrides: record.state.corrections.fingers });
-      return json(200, { workspace: { id: record.id, name: record.name, version: record.version }, ...projectScreen(parsed, fingered.events, fingered.positions, record.state), state: record.state });
+      if (!record.state.score) return json(409, { error: "The workspace has no score open" });
+      const { score, events, positions } = await music(record);
+      return json(200, { workspace: { id: record.id, name: record.name, version: record.version }, ...projectScreen(score, events, positions, record.state), state: record.state });
     }
     if (part === "/score" && request.method === "GET") {
       try {
@@ -425,6 +521,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       }
       if (request.method === "DELETE" && !summary) {
         await workspaces.removeScore(record, scoreId, by);
+        teacher?.settle(record);
         return json(200, { deleted: scoreId, version: record.version, state: record.state, scores: record.scores });
       }
       return json(405, { error: "Method not allowed" });
@@ -458,6 +555,70 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       response.writeHead(200, { "content-type": "audio/mpeg", "content-length": audio.length, "cache-control": "private, max-age=86400" });
       return response.end(audio);
     }
+    if (part === "/hear" && request.method === "POST") {
+      if (!hear) return json(503, { error: "This site has no ears: set ELEVENLABS_API_KEY on the server" });
+      const audio = await readBody(request);
+      if (!audio.length) return json(400, { error: "Send the recording as the body" });
+      try {
+        return json(200, { text: String((await hear(audio, String(request.headers["content-type"] ?? "audio/webm"))) ?? "").trim() });
+      } catch (error) {
+        return json(502, { error: `The ears could not make that out: ${error.message}` });
+      }
+    }
+    if (part.startsWith("/teacher")) {
+      if (!teacher) return json(503, { error: "This site has no teacher: set OPENROUTER_API_KEY (and OPENROUTER_MODEL) on the server" });
+      const body = async () => {
+        try {
+          const text = (await readBody(request)).toString("utf8");
+          return text.trim() ? JSON.parse(text) : {};
+        } catch {
+          return null;
+        }
+      };
+      if (part === "/teacher" && request.method === "GET") return json(200, teacher.status(record));
+      if (part === "/teacher" && request.method === "POST") {
+        const asked = await body();
+        if (!asked) return json(400, { error: "The body must be JSON" });
+        if (teacher.session(record)) return json(409, { error: "A lesson is already under way in this workspace" });
+        try {
+          const status = await teacher.start(record, asked);
+          return json(201, status);
+        } catch (error) {
+          return json(400, { error: error.message });
+        }
+      }
+      if (part === "/teacher" && request.method === "DELETE") return json(200, { stopped: await teacher.stop(record, "stopped") });
+      if (part === "/teacher/events" && request.method === "GET") {
+        const status = teacher.status(record);
+        if (!status.on) return json(404, { error: "No lesson is under way" });
+        response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });
+        send(response, "status", { status: status.status, ...(status.error ? { error: status.error } : {}) });
+        const stop = teacher.watch(record, response);
+        const beat = setInterval(() => response.write(": keep\n\n"), 25000).unref();
+        request.on("close", () => {
+          clearInterval(beat);
+          stop?.();
+        });
+        return null;
+      }
+      if (part === "/teacher/say" && request.method === "POST") {
+        const asked = await body();
+        if (!asked) return json(400, { error: "The body must be JSON" });
+        if (!teacher.session(record)) return json(404, { error: "No lesson is under way" });
+        try {
+          return json(200, teacher.say(record, asked.text));
+        } catch (error) {
+          return json(400, { error: error.message });
+        }
+      }
+      if (part === "/teacher/done" && request.method === "POST") {
+        const asked = await body();
+        if (!asked) return json(400, { error: "The body must be JSON" });
+        if (!teacher.session(record)) return json(404, { error: "No lesson is under way" });
+        return json(200, teacher.done(record, asked.id, asked.result));
+      }
+      return json(405, { error: "Method not allowed" });
+    }
     if (part === "/commands" && request.method === "POST") {
       let body;
       try {
@@ -471,7 +632,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
       return json(202, { command: record.state.command, version: record.version });
     }
     if (part === "") {
-      if (request.method === "GET") return json(200, { ...connection(record), version: record.version, state: record.state, scores: record.scores, updated: record.updated });
+      if (request.method === "GET") return json(200, { ...connection(record), version: record.version, state: record.state, scores: record.scores, updated: record.updated, site: { voice: Boolean(speak), teacher: Boolean(teacher), ears: Boolean(hear) } });
       if (request.method === "PATCH" || request.method === "PUT") {
         let body;
         try {
@@ -481,9 +642,11 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
         }
         const change = body?.state !== undefined || body?.name !== undefined ? body : { state: body };
         await workspaces.patch(record, change, by, { replace: request.method === "PUT" });
+        teacher?.settle(record);
         return json(200, { version: record.version, state: record.state, name: record.name, scores: record.scores });
       }
       if (request.method === "DELETE") {
+        await teacher?.stop(record, "removed");
         await workspaces.remove(record);
         return json(200, { deleted: record.id });
       }

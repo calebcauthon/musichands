@@ -2,73 +2,91 @@
 // interface (the seam at the foot of sheet.js) and uses nothing else of the
 // page: it reads the music and the workspace through it, and does everything
 // it does by changing the workspace's public fields — tempo, hands, time,
-// camera, pose, passage, playing — as an agent could. What a lesson is, the
-// order it goes in and every word the voice says are in lesson.js; this file
-// is the Learn button, choosing the measures, the lesson panel and the voice.
+// pose, passage, playing — as an agent could.
 //
-// The lesson under way is kept in the workspace as `lesson`. The workspace
-// stores it as given and never reads it, so the shape of a lesson can change
-// here without touching the page or the server.
-import { advanceLesson, cleanLesson, defaultLesson, describeAdvance, describeNext, describePlayed, describeProgress, introTempo, lessonHands, lessonPassage, lessonRange, OVERHEAD, phaseLines, phasePlays, stageHands } from "./lesson.js";
-import { Narrator } from "./speech.js";
+// There are several ways of learning, each a module of its own with the same
+// shape (see MODES): a lesson with a teacher who talks and listens
+// (learning-teacher.js), and the drill, rigid and silent (learning-drill.js).
+// This file is what they share: the Learn button, choosing the measures in
+// the notation and the way of learning them, and handing the lesson under
+// way to the module it belongs to. The lesson is kept in the workspace as
+// `lesson` (lesson.js), with `mode` saying whose it is; the workspace stores
+// it as given and never reads it.
+//
+// A way of learning is { id, name, blurb, available(app), mount(app, host) },
+// and what mount answers has:
+//   start({ from, to })        begins a lesson on those measures: the module writes `lesson` to the workspace
+//   show({ state, lesson, lead })  the workspace's lesson, of this module's mode, laid on the screen
+//   leave()                    the lesson is no longer on the screen: ended, or another piece opened
+//   discard()                  a lesson of this mode found when the page opened: put right quietly
+//   key(event, { onControl, picking }) → true if taken
+// The host gives it { root, picking() } and the module's own markup is in index.html.
+import { cleanLesson, defaultLesson, DEFAULT_MODE, NO_LESSON } from "./lesson.js";
+import drillMode from "./learning-drill.js";
+import teacherMode from "./learning-teacher.js";
 
-const NO_POSE = { left: null, right: null };
-const keyOf = (lesson) => (lesson ? `${lesson.from}-${lesson.to}:${lesson.stage}:${lesson.phase}` : null);
+export const MODES = [teacherMode, drillMode];
 
 export function mountLearning(app, root = document) {
   const learnButton = root.querySelector("#learn");
-  const panel = {
-    root: root.querySelector("#lesson"),
-    kicker: root.querySelector("#lesson-kicker"),
-    progress: root.querySelector("#lesson-progress"),
-    caption: root.querySelector("#lesson-caption"),
-    next: root.querySelector("#lesson-next"),
-    stop: root.querySelector("#lesson-stop"),
-    play: root.querySelector("#lesson-play"),
-    restart: root.querySelector("#lesson-restart"),
-    again: root.querySelector("#lesson-again"),
+  const pick = {
+    root: root.querySelector("#lesson-pick"),
+    text: root.querySelector("#lesson-pick-text"),
+    modes: root.querySelector("#lesson-modes"),
+    options: [...root.querySelectorAll(".lesson-pick__options")],
+    start: root.querySelector("#lesson-start"),
+    cancel: root.querySelector("#lesson-cancel"),
   };
-  const pick = { root: root.querySelector("#lesson-pick"), text: root.querySelector("#lesson-pick-text"), start: root.querySelector("#lesson-start"), cancel: root.querySelector("#lesson-cancel") };
 
   let picking = null; // choosing the measures: { from, to, anchor }; anchor is the end clicked first, while the other is awaited
-  let seen; // the lesson, by key, last laid on the screen
-  let scoreSeen = null; // the piece that was open then
+  let chosen = DEFAULT_MODE; // the way of learning picked
+  let scoreSeen = null; // the piece that was open when the screen was last laid
+  let opening = true; // the workspace has only just been opened: nothing has been laid on the screen yet
+  let shown = null; // the module whose lesson is on the screen
 
-  // The panel shows what has been said in the phase so far, a line at a time.
-  const voice = new Narrator({
-    fetchSpeech: (text) => app.speech(text),
-    onLine: (line) => {
-      panel.caption.textContent = panel.caption.textContent ? `${panel.caption.textContent} ${line}` : line;
-    },
-  });
-  function sayAfresh(lines) {
-    voice.stop();
-    panel.caption.textContent = "";
-    return voice.sayAll(Array.isArray(lines) ? lines : [lines]);
-  }
+  const host = { root, picking: () => picking };
+  const modules = new Map(MODES.map((mode) => [mode.id, { ...mode, ...mode.mount(app, host) }]));
+  const modeOf = (lesson) => (lesson && modules.get(lesson.mode)) || null;
+  const offered = () => MODES.filter((mode) => mode.available(app));
 
-  // The lesson the workspace holds, if it is one on the piece that is open.
+  // The lesson the workspace holds, if it is one on the piece that is open and of a way of learning there is.
   function current(state = app.state) {
     const lesson = cleanLesson(state?.lesson);
-    return lesson && app.score && (!lesson.score || lesson.score === state.score?.id) ? lesson : null;
-  }
-
-  // The workspace as it should be where a lesson stands: its measures for
-  // Play to keep to, the hands it is about, quiet at the top of the passage.
-  function standing(lesson) {
-    return { lesson, passage: lessonPassage(lesson), hands: lessonHands(lesson), time: lessonRange(lesson, app.score.measures).start, playing: false, pose: NO_POSE };
+    return lesson && app.score && modules.has(lesson.mode) && (!lesson.score || lesson.score === state.score?.id) ? lesson : null;
   }
 
   // -------------------------------------------------------------------------
-  // Choosing the measures in the notation. The measure on screen and the few
-  // after it are offered; a click on a measure starts the passage there, and
-  // a second click ends it (in either direction).
+  // Choosing the measures in the notation, and the way of learning them. The
+  // measure on screen and the few after it are offered; a click on a measure
+  // starts the passage there, and a second click ends it (in either direction).
+
+  for (const mode of MODES) {
+    const button = root.createElement("button");
+    button.className = "button";
+    button.type = "button";
+    button.dataset.mode = mode.id;
+    button.textContent = mode.name;
+    button.title = mode.blurb;
+    button.addEventListener("click", () => chooseMode(mode.id));
+    pick.modes.append(button);
+  }
+
+  function chooseMode(id) {
+    chosen = id;
+    for (const button of pick.modes.children) button.setAttribute("aria-pressed", String(button.dataset.mode === chosen));
+    for (const options of pick.options) options.hidden = options.dataset.mode !== chosen;
+  }
 
   function offerLesson() {
     if (!app.score || !app.state) return;
-    const offered = defaultLesson(app.measureIndex, app.score.measures.length);
+    const ways = offered();
+    if (!ways.length) return;
+    if (!ways.some((mode) => mode.id === chosen)) chosen = ways[0].id;
+    for (const button of pick.modes.children) button.hidden = !ways.some((mode) => mode.id === button.dataset.mode);
+    chooseMode(chosen);
+    const first = defaultLesson(app.measureIndex, app.score.measures.length);
     if (app.state.playing) app.change({ playing: false });
-    showPicking({ from: offered.from, to: offered.to, anchor: null });
+    showPicking({ from: first.from, to: first.to, anchor: null });
   }
 
   function showPicking(next) {
@@ -79,8 +97,8 @@ export function mountLearning(app, root = document) {
     if (!current()) learnButton.setAttribute("aria-pressed", String(Boolean(picking)));
     if (picking) {
       const number = (index) => app.score.measures[index].number;
-      const chosen = picking.from === picking.to ? `Measure ${number(picking.from)}` : `Measures ${number(picking.from)}–${number(picking.to)}`;
-      pick.text.textContent = picking.anchor === null ? `${chosen}. Click a measure to start somewhere else.` : `${chosen}. Now click the last measure.`;
+      const measures = picking.from === picking.to ? `Measure ${number(picking.from)}` : `Measures ${number(picking.from)}–${number(picking.to)}`;
+      pick.text.textContent = picking.anchor === null ? `${measures}. Click a measure to start somewhere else.` : `${measures}. Now click the last measure.`;
     }
     if (Boolean(was) !== Boolean(picking)) app.onMeasure(picking ? { click: pickMeasure, hover: stretchTo } : null);
     if (!was || !picking || was.from !== picking.from || was.to !== picking.to) app.tint(picking ? { from: picking.from, to: picking.to, strong: true } : null);
@@ -99,75 +117,50 @@ export function mountLearning(app, root = document) {
     showPicking({ from: Math.min(picking.anchor, index), to: Math.max(picking.anchor, index), anchor: picking.anchor });
   }
 
-  function startPicked() {
+  async function startPicked() {
     const { from, to } = picking;
+    const mode = modules.get(chosen);
     showPicking(null);
-    startLesson(from, to);
+    pick.start.disabled = true;
+    try {
+      await mode.start({ from, to }); // the change comes back through show()
+    } catch (error) {
+      console.warn(`MusicHands: the lesson (${mode.id}) could not start.`, error);
+      app.change({ lesson: null });
+      showPicking({ from, to, anchor: null });
+      pick.text.textContent = `It could not start: ${error.message}`;
+    } finally {
+      pick.start.disabled = false;
+    }
   }
 
   // -------------------------------------------------------------------------
-  // The lesson
+  // The lesson on the screen, handed to the way of learning it belongs to
 
-  // Puts the workspace at the start of the passage, seen from above, for the
-  // whole of it to be heard. Each phase is talked through, and then played,
-  // by show() as the change comes back.
-  function startLesson(from, to) {
-    if (!app.score || !app.state) return;
-    const lesson = { from: Math.min(from, to), to: Math.max(from, to), stage: "right", phase: "intro", score: app.state.score?.id ?? "" };
-    app.change({ ...standing(lesson), tempo: introTempo(app.scoreTempo), camera: { ...app.state.camera, view: { ...OVERHEAD }, autoCut: false } });
+  function paint(state = app.state) {
+    const lesson = current(state);
+    learnButton.hidden = !offered().length;
+    if (lesson || !picking) learnButton.setAttribute("aria-pressed", String(Boolean(lesson)));
+    learnButton.textContent = lesson ? "Learning…" : "Learn";
   }
 
-  function stopLesson() {
-    if (!app.state?.lesson) return;
-    voice.stop();
-    app.change({ lesson: null, passage: null, playing: false, tempo: null, hands: stageHands("both"), pose: NO_POSE });
+  function leave() {
+    shown?.leave();
+    shown = null;
   }
 
-  // "Got it": the next phase, or a little faster, or the next hand, or done.
-  function gotIt() {
-    const lesson = current();
-    if (!lesson) return;
-    const target = app.scoreTempo;
-    const next = advanceLesson(lesson, app.tempo, target);
-    if (next.event === "done") app.change({ lesson: null, passage: null, tempo: target, hands: stageHands("both"), playing: false, pose: NO_POSE });
-    else if (keyOf(next.lesson) !== keyOf(lesson)) {
-      // A new phase: back to the top of the passage, quiet, the hands back to the score's, for the voice to introduce it (show()).
-      app.change({ ...standing(next.lesson), tempo: next.tempo });
-      return;
-    } else app.change({ tempo: next.tempo }); // the music, if playing, follows the new tempo where it is
-    sayAfresh(describeAdvance(next.event, { tempo: next.tempo, target }));
-  }
-
-  // Talks the phase through, then plays the passage if the phase plays it.
-  // A line may come with something for the hands to do as it is said: a pose
-  // to take, or a moment of the piece to play.
-  function narratePhase(lesson, { thenPlay = true } = {}) {
-    const key = keyOf(lesson);
-    const still = () => keyOf(current()) === key;
-    const lines = phaseLines(lesson, { score: app.score, positions: app.positions, events: app.events, tempo: app.tempo, target: app.scoreTempo }).map((line) => {
-      if (line?.pose) return { say: line.say, before: () => still() && app.change({ pose: line.pose }) };
-      if (line?.time !== undefined) return { say: line.say, before: () => still() && app.playMoment(line.time) };
-      return line;
-    });
-    sayAfresh(lines).then((ending) => {
-      if (!thenPlay || !phasePlays(lesson.phase) || ending === "dropped" || !still() || app.state.playing) return;
-      app.playFrom(lessonRange(lesson, app.score.measures).start);
-    });
-  }
-
-  // The passage from the top; played, in a phase that plays it.
-  function restart() {
-    const lesson = current();
-    if (!lesson) return;
-    const { start } = lessonRange(lesson, app.score.measures);
-    if (phasePlays(lesson.phase)) app.playFrom(start);
-    else app.change({ time: start, playing: false });
-  }
-
-  // Lays the workspace's lesson on the screen. When a phase begins, the
-  // browser that began it (or the one that plays the music, when an agent
-  // did) talks it through.
-  function show({ state, local, own, lead }) {
+  function show({ state, lead }) {
+    // A lesson is begun by someone, never by opening the page: one left in
+    // the workspace from before is ended, quietly, and the piece put back.
+    if (opening) {
+      opening = false;
+      if (state.lesson) {
+        scoreSeen = state.score?.id ?? null;
+        modeOf(cleanLesson(state.lesson))?.discard();
+        app.change(NO_LESSON);
+        return;
+      }
+    }
     // Another piece has been opened: choosing stops, and a lesson on the old piece is over.
     const scoreId = state.score?.id ?? null;
     if (scoreId !== scoreSeen) {
@@ -178,80 +171,51 @@ export function mountLearning(app, root = document) {
     if (kept?.score && kept.score !== scoreId) app.change({ lesson: null });
 
     const lesson = current(state);
-    const target = app.scoreTempo;
-    panel.root.hidden = !lesson;
-    if (lesson || !picking) learnButton.setAttribute("aria-pressed", String(Boolean(lesson)));
-    learnButton.textContent = lesson ? "Learning…" : "Learn";
-    if (lesson) {
-      const range = lessonRange(lesson, app.score.measures);
-      panel.kicker.textContent = range.from === range.to ? `Learning measure ${range.from}` : `Learning measures ${range.from}–${range.to}`;
-      panel.progress.textContent = describeProgress(lesson, { tempo: app.tempo, target });
-      panel.next.textContent = describeNext(lesson, { tempo: app.tempo, target });
-      panel.play.textContent = state.playing ? "⏸ Pause" : "▶ Play";
-      panel.play.title = state.playing ? "Pause the passage" : phasePlays(lesson.phase) === Infinity ? "Play the passage on a loop" : "Play the passage";
-    }
-    const key = keyOf(lesson);
-    if (key === seen) return;
-    const wasOn = Boolean(seen);
-    seen = key;
-    if (!lesson) {
-      if (wasOn && !own) voice.stop(); // ended elsewhere; the "well done" of a finish here is left to play out
-      panel.caption.textContent = "";
-      return;
-    }
-    if (local || (lead && !own)) narratePhase(lesson);
+    const mode = modeOf(lesson);
+    if (shown && shown !== mode) leave();
+    shown = mode;
+    if (mode) mode.show({ state, lesson, lead: Boolean(lead) });
+    paint(state);
   }
 
   app.addEventListener("state", (event) => show(event.detail));
-  // What was playing has played out: the introduction goes straight on to
-  // the first hand; other phases say what to do next.
-  app.addEventListener("played", () => {
-    const lesson = current();
-    if (!lesson) return;
-    if (lesson.phase === "intro") gotIt();
-    else voice.say(describePlayed(lesson.phase));
-  });
   app.addEventListener("reset", () => {
-    voice.stop();
-    seen = undefined;
+    leave();
     scoreSeen = null;
+    opening = true;
     if (picking) showPicking(null);
   });
 
-  // L starts choosing (or stops it), G is "got it"; while choosing, Enter
-  // takes the measures and Escape drops them, whatever has focus.
+  // L starts choosing (or stops it); while choosing, Enter takes the
+  // measures and Escape drops them, whatever has focus. The rest of the keys
+  // are the way of learning's.
   app.onKey((event, { onControl }) => {
     if (picking && (event.key === "Enter" || event.key === "Escape")) {
       if (event.key === "Enter") startPicked();
       else showPicking(null);
       return true;
     }
+    const mode = shown ?? (picking ? modules.get(chosen) : null);
+    if (mode?.key(event, { onControl, picking: Boolean(picking) })) return true;
     if (onControl) return false;
     if (event.key === "l" || event.key === "L") {
       if (picking) showPicking(null);
       else if (!current()) offerLesson();
       return true;
     }
-    if ((event.key === "g" || event.key === "G") && current()) {
-      gotIt();
-      return true;
-    }
     return false;
   });
 
-  learnButton.addEventListener("click", () => (current() ? stopLesson() : picking ? showPicking(null) : offerLesson()));
+  learnButton.addEventListener("click", () => (current() ? shown?.stop() : picking ? showPicking(null) : offerLesson()));
   pick.start.addEventListener("click", startPicked);
   pick.cancel.addEventListener("click", () => showPicking(null));
-  panel.next.addEventListener("click", gotIt);
-  panel.stop.addEventListener("click", stopLesson);
-  panel.play.addEventListener("click", () => app.togglePlaying());
-  panel.restart.addEventListener("click", restart);
-  panel.again.addEventListener("click", () => {
-    const lesson = current();
-    if (!lesson) return;
-    if (lesson.phase === "position") app.change({ pose: NO_POSE });
-    narratePhase(lesson, { thenPlay: !app.state.playing });
+  pick.root.addEventListener("keydown", (event) => {
+    if (!event.target.matches("input")) return;
+    if (event.key === "Enter") {
+      event.preventDefault();
+      startPicked();
+    } else if (event.key === "Escape") showPicking(null);
   });
 
-  return { offerLesson, startLesson, stopLesson, gotIt };
+  return { offerLesson, startPicked, stopLesson: () => shown?.stop(), modules };
 }

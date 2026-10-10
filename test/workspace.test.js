@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { applyHandMoves, countCorrections, matchingMoments, withCorrection } from "../corrections.js";
 import { assignFingering } from "../fingering.js";
-import { createAppServer } from "../server.js";
+import { createAppServer, elevenLabsVoice } from "../server.js";
 import { parseConnection, workspaceFromHash } from "../workspace-client.js";
 import { cleanPassage, cleanPose, cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
 
@@ -377,10 +377,41 @@ test("Play can be kept to a stretch of measures, a set number of times or over a
   assert.deepEqual(cleanPassage({ from: 4 }), { from: 4, to: 4, times: null }, "one measure, over and over");
   assert.equal(cleanPassage({ from: 5, to: 4 }), null);
   assert.deepEqual(cleanPassage({ from: 0, to: 1, times: 0 }), { from: 0, to: 1, times: null });
+  assert.deepEqual(cleanPassage({ from: 4, to: 5, times: 1, end: 18.5 }), { from: 4, to: 5, times: 1, end: 18.5 }, "it can stop part way through its measures");
+  assert.deepEqual(cleanPassage({ from: 4, to: 5, times: 1, start: 17, end: 16 }), { from: 4, to: 5, times: 1, start: 17 }, "but not before it starts");
   let state = mergeState(defaultState(), { passage: { from: 2, to: 3, times: 2 } });
   assert.deepEqual(state.passage, { from: 2, to: 3, times: 2 });
   state = mergeState(state, { passage: { times: null } });
   assert.deepEqual(state.passage, { from: 2, to: 3, times: null }, "a null count is over and over");
+  state = mergeState(state, { passage: { end: 9 } });
+  assert.equal(state.passage.end, 9);
+  state = mergeState(state, { passage: { end: null } });
+  assert.equal("end" in state.passage, false, "a null end is the whole of the measures again");
   state = mergeState(state, { passage: null });
   assert.equal(state.passage, null);
+});
+
+test("the voice reads only a few lines at once, in order, and asks again when refused for being busy", async () => {
+  let busy = 0;
+  let most = 0;
+  const started = [];
+  let refusals = 2;
+  const request = async (url, options) => {
+    const { text, model_id } = JSON.parse(options.body);
+    if (text === "three" && refusals-- > 0) return { ok: false, status: 429 };
+    started.push(text);
+    busy += 1;
+    most = Math.max(most, busy);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    busy -= 1;
+    return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(`${model_id}:${text}`).buffer };
+  };
+  const speak = elevenLabsVoice({ key: "k", voice: "v", request, wait: async () => {} });
+  assert.equal(speak.label, "v/eleven_v4", "the voice is Eleven v4 unless told otherwise");
+  const read = await Promise.all(["one", "two", "three", "four", "five"].map((text) => speak(text)));
+  assert.deepEqual(read.map((audio) => audio.toString()), ["eleven_v4:one", "eleven_v4:two", "eleven_v4:three", "eleven_v4:four", "eleven_v4:five"]);
+  assert.equal(most, 2, "two at a time");
+  assert.deepEqual(started.slice(0, 2), ["one", "two"], "in the order asked");
+  assert.equal(elevenLabsVoice({ key: "" }), null, "no key, no voice");
+  await assert.rejects(elevenLabsVoice({ key: "k", request: async () => ({ ok: false, status: 401 }) })("x"), /answered 401/);
 });
