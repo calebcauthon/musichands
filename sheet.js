@@ -1209,7 +1209,7 @@ async function applyLatest() {
       page.poseArrived = false;
       for (const hand of HANDS) {
         if (!state.hands[hand].sound) continue;
-        for (const note of state.pose[hand]?.press ?? []) audio.noteOn(noteToMidi(note), { delay: landing, duration: 1500 });
+        for (const note of state.pose[hand]?.press ?? []) audio.noteOn(noteToMidi(note), { delay: landing, duration: state.pose[hand].hold ?? 1500 });
       }
     }
   }

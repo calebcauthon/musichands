@@ -195,8 +195,12 @@ say: `fingers` is which finger sits on which note, `press` which of those
 keys are held down. The page draws the hand there, strikes and sounds the
 pressed keys as the pose arrives, and leaves the rest of the screen alone;
 `null` gives the hand back to the score. A pose is only shown while the piece
-is not playing. The lesson's placement phase writes poses finger by finger as
-the voice names them; you can do the same:
+is not playing. Two optional fields make a run of poses play like music:
+`hold`, how long the pressed keys sound in ms (1500 if left out), and `step`,
+any integer that changes from one pose to the next, so the same keys pressed
+twice in a row are struck twice. The agent's freehand playing is poses like
+that, one per step. The lesson's placement phase writes poses finger by finger
+as the voice names them; you can do the same:
 
 ```sh
 curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \

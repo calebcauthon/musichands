@@ -45,6 +45,7 @@ const QUIET_TURNS = 30; // turns without a word from the learner before the agen
 const MOST_MESSAGES = 200; // a conversation longer than this loses its oldest turns
 const KEPT_MESSAGES = 140; // down to about this many
 const MOST_PAUSE = 10; // seconds
+const MOST_STEPS = 64; // steps in one play_notes
 const NOTE = /^[A-G][#b]?-?\d$/;
 const HANDS = ["right", "left", "both"];
 const ABOUT = ["person", "workspace"];
@@ -55,7 +56,7 @@ const LOOK_KINDS = { piano: ["ebony", "white", "rosewood", "crimson"], build: ["
 // ---------------------------------------------------------------------------
 // What the agent is told
 
-const WHO = `You are beside one adult at a piano. They are working on a piece with a screen that shows a pair of hands playing it, with the notation beside it. The screen is theirs: they move about the piece, play it, step through it, choose a hand, change a fingering, as they please. You are company who knows the music and can work the screen: you answer what they ask and do what they ask — go to a measure, play something, slower, one hand, show a fingering, change it, say what the hands do here, look ahead — and otherwise you keep quiet. You do not teach unless they ask you to; when they do, a LESSON begins (see below, if one is on) and you lead it. They cannot read while they play: everything reaches them by ear, through a text-to-speech voice that reads what you say.
+const WHO = `You are beside one adult at a piano. They are working on a piece with a screen that shows a pair of hands playing it, with the notation beside it. The screen is theirs: they move about the piece, play it, step through it, choose a hand, change a fingering, as they please. You are company who knows the music and can work the screen: you answer what they ask and do what they ask — go to a measure, play something, slower, one hand, show a fingering, change it, say what the hands do here, look ahead — and otherwise you keep quiet. You know music in general as well as this piece — keys, scales, chords, intervals, how a passage is built — and answer such questions plainly; when it helps to hear or see what you mean, the hands play it with play_notes, in the piece or not. You do not teach unless they ask you to; when they do, a LESSON begins (see below, if one is on) and you lead it. They cannot read while they play: everything reaches them by ear, through a text-to-speech voice that reads what you say.
 
 THE MANNER
 Plain, warm, precise, unhurried. Never childish, never gushing. Talks like someone sitting beside them, not like a manual. Says what was asked and no more; a word or two is often enough. Does not announce what it is about to do; does it, and says a word. No preamble, no recap, no filler praise. Short sentences, rarely more than twelve words. When a question is answered by doing something on the screen, do that.
@@ -79,9 +80,10 @@ Everything you do on the screen is a tool call. Every word you write outside a t
 - see: what is on the screen now, in full: where they are, what each hand has there, whether it is playing, the tempo, the hands, the camera, the passage Play keeps to. Their messages carry the short form of this, so you rarely need it.
 - screen: change the screen: go to a measure or a moment, set the tempo, choose the hands, finger numbers, sound, the camera, the passage Play keeps to, stop the music, the look of the stage. Send only what should change. This is how to do what they ask when it is not playing something.
 - play: the hands on the screen play some measures, or the stretch from one moment up to another (two or three notes, say), at a tempo, a number of times, or looped. It returns when the playing has played out — or sooner, if they say something, with their words. A loop returns only when they do. They play along with it, or watch, as you have told them.
+- play_notes: the hands on the screen play anything you choose, freehand, at a tempo: a scale, a chord, an arpeggio, a run, a bit of the piece changed to show a point. You give each step: which finger presses which key in each hand, and for how many beats. For the piece as written, use play or play_moment instead.
 - play_moment: the hands on the screen play one moment — one note or chord and nothing after it — as you name it.
 - place: put a hand on the screen where you say, finger by finger as you name them, so they can copy it. The pressed keys sound once as the hand lands; it is a picture of a hand, not a performance. After naming a finger, pause a moment for theirs to get there. fingers: [] gives the hand back to the score.
-- To be HEARD, play: play_moment for one note or chord of the piece, play for a stretch of it. "Let me show you" means one of these, not place.
+- To be HEARD, play: play_moment for one note or chord of the piece, play for a stretch of it, play_notes for anything not in it. "Let me show you" means one of these, not place.
 - pause: a silence of a few seconds, for them to do something.
 - listen: wait for them to say something. After a plain reply you wait anyway. Do not wait after every sentence; wait when there is something for them to do.
 - look: the brief for some measures: where each hand sits and every moment it plays, with the fingering as it stands. A few measures at a time.
@@ -139,6 +141,7 @@ const optional = (properties) => schema(properties, []);
 const tool = (name, description, parameters) => ({ type: "function", function: { name, description, parameters } });
 const measure = (what) => ({ type: "string", description: `${what}, by the score's measure number as the learner sees it.` });
 const hands = { type: "string", enum: HANDS, description: "Which hands are shown and heard." };
+const pressing = { type: "array", items: schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } }), description: "The keys this hand presses in the step, a finger each." };
 
 // The tools the agent always has.
 export const TOOLS = [
@@ -146,11 +149,24 @@ export const TOOLS = [
   tool("pause", "A silence, for the learner to do something.", schema({ seconds: { type: "number", minimum: 0.5, maximum: MOST_PAUSE } })),
   tool(
     "place",
-    "Put a hand on the screen where you say: which finger on which key, and which keys are pressed. Shown while nothing is playing; the pressed keys sound once as the hand lands, no more. To let them hear a note or chord of the piece, use play_moment; to hear a stretch of it, play. fingers: [] gives the hand back to the score.",
+    "Put a hand on the screen where you say: which finger on which key, and which keys are pressed. Shown while nothing is playing; the pressed keys sound once as the hand lands, no more. To let them hear a note or chord of the piece, use play_moment; to hear a stretch of it, play; to hear notes of your own, play_notes. fingers: [] gives the hand back to the score.",
     schema({
       hand: { type: "string", enum: ["right", "left"] },
       fingers: { type: "array", items: schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } }) },
       press: { type: "array", items: { type: "string" }, description: "The notes among those that are held down, usually the one just placed." },
+    }),
+  ),
+  tool(
+    "play_notes",
+    "The hands on the screen play notes you choose, freehand, in the piece or not: a scale, a chord, an arpeggio, a tune. Steps, in order: in each, the keys each hand presses (finger and note; [] for a hand that presses nothing then and stays where it is), held for so many beats. Returns when played out, or when the learner says something. The hands stay where they end; place with fingers [] gives a hand back to the score.",
+    schema({
+      tempo: { type: "integer", minimum: 30, maximum: 240, description: "Beats a minute." },
+      steps: {
+        type: "array",
+        minItems: 1,
+        maxItems: MOST_STEPS,
+        items: schema({ right: pressing, left: pressing, beats: { type: "number", minimum: 0.25, maximum: 8, description: "How long the step lasts, in beats." } }),
+      },
     }),
   ),
   tool("play_moment", "The hands on the screen play one moment of the piece: just that note or chord, nothing after it.", schema({ moment: { type: "string", description: "measure:beat" }, hands })),
@@ -233,7 +249,7 @@ export const LESSON_TOOLS = [
   tool("done", "End the lesson.", schema({ closing: { type: "string", description: "A last word, spoken." } })),
 ];
 
-export const ACTS = ["say", "pause", "place", "play_moment", "play"]; // the tools the screen performs
+export const ACTS = ["say", "pause", "place", "play_moment", "play", "play_notes"]; // the tools the screen performs
 
 // ---------------------------------------------------------------------------
 
@@ -520,7 +536,7 @@ export class Teacher {
     if (session.inbox.length) return this.heard(session, { interrupted: true, reason: "the learner spoke before this began; answer them", learner_said: session.inbox.shift() });
     const id = String(++session.serial);
     const sent = { id, ...act };
-    this.tell(session, "status", { status: act.type === "say" ? "speaking" : act.type === "play" || act.type === "play_moment" ? "playing" : "waiting", act: sent });
+    this.tell(session, "status", { status: act.type === "say" ? "speaking" : ["play", "play_moment", "play_notes"].includes(act.type) ? "playing" : "waiting", act: sent });
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (!session.pending.has(id)) return;
@@ -715,6 +731,26 @@ export class Teacher {
         const event = this.findMoment(music, args.moment, which);
         if (!event) return { error: `No moment ${args.moment} is played by ${which === "both" ? "either hand" : `the ${which} hand`}` };
         return this.perform(session, { type: "play_moment", time: event.time, hands: which, moment: momentName(event) });
+      }
+      case "play_notes": {
+        const tempo = Math.min(240, Math.max(30, Math.round(Number(args.tempo) || 0))) || 60;
+        const given = Array.isArray(args.steps) ? args.steps.slice(0, MOST_STEPS) : [];
+        if (!given.length) return { error: "No steps to play" };
+        const steps = [];
+        for (const [index, step] of given.entries()) {
+          const pressed = {};
+          for (const hand of ["right", "left"]) {
+            const keys = Array.isArray(step?.[hand]) ? step[hand] : [];
+            const fingers = keys.map((entry) => ({ finger: Number(entry?.finger), note: String(entry?.note ?? "") }));
+            const wrong = fingers.find((entry) => ![1, 2, 3, 4, 5].includes(entry.finger) || !NOTE.test(entry.note));
+            if (wrong) return { error: `Step ${index + 1}, ${hand} hand: finger ${wrong.finger} on ${wrong.note || "nothing"} is not a finger on a key (fingers 1 to 5, notes like C4, F#3, Bb2)` };
+            if (new Set(fingers.map((entry) => entry.finger)).size < fingers.length) return { error: `Step ${index + 1}, ${hand} hand: one finger on two keys` };
+            pressed[hand] = fingers;
+          }
+          const beats = Math.min(8, Math.max(0.25, Number(step?.beats) || 1));
+          steps.push({ ...pressed, ms: Math.round((beats * 60000) / tempo) });
+        }
+        return this.perform(session, { type: "play_notes", tempo, steps });
       }
       case "play": {
         const music = await this.music(record);
