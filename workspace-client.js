@@ -97,6 +97,7 @@ export class WorkspaceClient extends EventTarget {
     this.source = null;
     this.pending = null; // a patch waiting to be sent
     this.sending = null; // the request on its way
+    this.sent = null; // the patch that request carries
     this.info = null;
   }
 
@@ -116,10 +117,13 @@ export class WorkspaceClient extends EventTarget {
     if (version < this.version) return;
     this.version = version;
     if (Array.isArray(scores)) this.scores = scores;
-    // A change of ours still on its way stays on top of what the server sent.
-    this.state = this.pending ? mergeState(state, this.pending) : state;
+    // Changes of ours still on their way (sent, or waiting to be) stay on top
+    // of what the server sent, here and on the page, so an older state never
+    // shows through them for a moment.
+    const ours = this.sent && this.pending ? layer(this.sent, this.pending) : this.sent ?? this.pending;
+    this.state = ours ? mergeState(state, ours) : state;
     if (typeof name === "string") this.name = name;
-    this.dispatchEvent(new CustomEvent("state", { detail: { state, version, by: by ?? "" } }));
+    this.dispatchEvent(new CustomEvent("state", { detail: { state: this.state, version, by: by ?? "" } }));
   }
 
   listen() {
@@ -166,6 +170,7 @@ export class WorkspaceClient extends EventTarget {
     if (this.sending || !this.pending) return;
     const patch = this.pending;
     this.pending = null;
+    this.sent = patch;
     this.sending = api(this.base, this.path, this.token, { method: "PATCH", headers: { "x-client": this.client }, body: JSON.stringify(patch) })
       .then(answer)
       .then((body) => {
@@ -174,6 +179,7 @@ export class WorkspaceClient extends EventTarget {
       .catch((error) => this.dispatchEvent(new CustomEvent("error", { detail: { error } })))
       .finally(() => {
         this.sending = null;
+        this.sent = null;
         this.flush();
       });
   }

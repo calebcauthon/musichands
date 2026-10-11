@@ -23,7 +23,7 @@ export function defaultState() {
     corrections: { fingers: {}, hands: {} },
     lesson: null, // the learning module's own record of the lesson under way (learning.js), kept as given and never read here
     passage: null, // { from, to, times, start?, end? }: the measures Play plays (or the part of them between two times), and how many times (null: over and over), instead of the piece from here on
-    pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note] }
+    pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note], hold?, step? }
     command: null, // { seq, type }: the last thing an agent asked the page to do
   };
 }
@@ -108,7 +108,12 @@ export function cleanPose(value) {
   if (!fingers.length) return null;
   fingers.sort((a, b) => a.finger - b.finger);
   const press = Array.isArray(value.press) ? [...new Set(value.press.map(String).filter((note) => NOTE.test(note)))] : [];
-  return { fingers, press };
+  const pose = { fingers, press };
+  // Played freehand: how long the pressed keys sound (ms), and the step, so the same keys pressed again are struck again.
+  const hold = Number(value.hold);
+  if (hold > 0) pose.hold = Math.min(10000, Math.round(hold));
+  if (Number.isInteger(value.step)) pose.step = value.step;
+  return pose;
 }
 
 // Whatever was stored or sent, made into a state the page can show.

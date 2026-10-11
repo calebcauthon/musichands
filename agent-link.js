@@ -19,6 +19,7 @@ import { lessonRange, stageHands } from "./lesson.js";
 import { Microphone, Narrator } from "./speech.js";
 
 const NO_POSE = { left: null, right: null };
+const HANDS = ["left", "right"];
 const MOMENT_PAUSE = 800; // ms a moment is left to sound before the next thing
 
 export function createAgentLink(app, { root = document } = {}) {
@@ -138,7 +139,7 @@ export function createAgentLink(app, { root = document } = {}) {
       case "place": {
         const { hand, fingers, press } = asked;
         if (app.state.playing) app.change({ playing: false });
-        app.change({ pose: { [hand]: fingers.length ? { fingers, press } : null } });
+        app.change({ pose: { [hand]: fingers.length ? { fingers, press, hold: null, step: null } : null } });
         after(asked.pauseMs ?? 0, { placed: true });
         break;
       }
@@ -147,6 +148,9 @@ export function createAgentLink(app, { root = document } = {}) {
         app.change({ hands: stageHands(asked.hands), pose: NO_POSE });
         app.playMoment(asked.time);
         after(MOMENT_PAUSE, { played: true });
+        break;
+      case "play_notes":
+        mine.cancel = playNotes(asked.steps, (result) => finish(result));
         break;
       case "play": {
         const passage = { from: asked.from, to: asked.to, times: asked.loop ? null : asked.times, start: asked.start ?? null, end: asked.end ?? null };
@@ -159,6 +163,54 @@ export function createAgentLink(app, { root = document } = {}) {
         finish({ error: `the screen cannot ${asked.type}` });
     }
     changed();
+  }
+
+  // Plays freehand: each step puts the hands where it says and presses its
+  // keys, for as long as it lasts; a hand with nothing to press in a step is
+  // lifted where it is. Answers a cancel.
+  function playNotes(steps, done) {
+    if (app.state.playing) app.change({ playing: false });
+    const used = HANDS.filter((hand) => steps.some((step) => step[hand].length));
+    const hidden = used.filter((hand) => !app.state.hands[hand].show || !app.state.hands[hand].sound);
+    if (hidden.length) app.change({ hands: Object.fromEntries(hidden.map((hand) => [hand, { show: true, sound: true }])) });
+    const resting = { left: app.state.pose.left?.fingers ?? null, right: app.state.pose.right?.fingers ?? null };
+    let timer = null;
+    let at = performance.now();
+    const lift = () => {
+      const pose = {};
+      for (const hand of HANDS) if (resting[hand]) pose[hand] = { fingers: resting[hand], press: [], hold: null, step: null };
+      if (Object.keys(pose).length) app.change({ pose });
+    };
+    const next = (index) => {
+      // Held where it is: the run waits, and goes on from this step when taken up again.
+      if (paused) {
+        timer = setTimeout(() => {
+          at = performance.now();
+          next(index);
+        }, 100);
+        return;
+      }
+      if (index === steps.length) {
+        lift();
+        return done({ played: true });
+      }
+      const step = steps[index];
+      const pose = {};
+      for (const hand of HANDS) {
+        if (step[hand].length) {
+          resting[hand] = step[hand];
+          pose[hand] = { fingers: step[hand], press: step[hand].map((entry) => entry.note), hold: step.ms, step: index };
+        } else if (resting[hand]) pose[hand] = { fingers: resting[hand], press: [], hold: null, step: index };
+      }
+      app.change({ pose });
+      at += step.ms;
+      timer = setTimeout(() => next(index + 1), Math.max(0, at - performance.now()));
+    };
+    next(0);
+    return () => {
+      clearTimeout(timer);
+      lift();
+    };
   }
 
   // Cuts the act short here: the voice and the music stop. With `tell`, the

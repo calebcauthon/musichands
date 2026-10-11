@@ -370,6 +370,8 @@ test("a hand can be put somewhere directly, finger by finger, and given back to 
   assert.deepEqual(state.pose.right.press, ["D4"]);
   state = mergeState(state, { pose: { right: null } });
   assert.equal(state.pose.right, null);
+  // Played freehand, a pose says how long its keys sound and which step it is.
+  assert.deepEqual(cleanState({ ...defaultState(), pose: { right: { fingers: [{ finger: 1, note: "A4" }], press: ["A4"], hold: 500.4, step: 3 } } }).pose.right, { fingers: [{ finger: 1, note: "A4" }], press: ["A4"], hold: 500, step: 3 });
 });
 
 test("Play can be kept to a stretch of measures, a set number of times or over and over", () => {

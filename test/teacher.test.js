@@ -203,6 +203,16 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
       assert.match(JSON.parse(model.calls[8].messages.at(-2).content).error, /No moment 9:9/);
       assert.match(last(model).error, /No such tool now: teach/);
 
+      // Freehand: the steps reach the screen with their length in ms at the tempo; a finger that is not one is an error.
+      const steps = [{ right: [{ finger: 1, note: "A4" }], left: [], beats: 1 }, { right: [{ finger: 2, note: "B4" }], left: [{ finger: 5, note: "A2" }], beats: 0.5 }];
+      model.answer({ content: "", tool_calls: [call("c8c", "play_notes", { tempo: 120, steps }), call("c8d", "play_notes", { tempo: 60, steps: [{ right: [{ finger: 6, note: "A4" }], left: [], beats: 1 }] })] });
+      const freehand = await events.nextOf("act");
+      assert.deepEqual(freehand, { id: freehand.id, type: "play_notes", tempo: 120, steps: [{ right: [{ finger: 1, note: "A4" }], left: [], ms: 500 }, { right: [{ finger: 2, note: "B4" }], left: [{ finger: 5, note: "A2" }], ms: 250 }] });
+      await api("/teacher/done", "POST", { id: freehand.id, result: { played: true } });
+      await events.nextOf("status");
+      assert.deepEqual(last(model, 2), { played: true });
+      assert.match(last(model).error, /Step 1, right hand: finger 6 on A4/);
+
       // Done: the last word is spoken, the piece is put back, and the agent is simply there again.
       model.answer({ content: "", tool_calls: [call("c9", "done", { closing: "That's it for today." })] });
       const closing = await events.nextOf("act");
@@ -214,11 +224,11 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
       assert.equal(after.passage, null);
       assert.deepEqual(after.hands, { left: { show: true, sound: true }, right: { show: true, sound: true } });
       await events.nextOf("status");
-      assert.equal(model.calls.length, 10, "the model is told the lesson is over");
+      assert.equal(model.calls.length, 11, "the model is told the lesson is over");
       assert.match(last(model).now, /the lesson is over/);
-      assert.deepEqual(model.calls[9].tools, COMPANY_TOOLS, "the lesson's tools are gone");
-      assert.doesNotMatch(model.calls[9].messages[0].content, /THE LESSON/, "and so are its instructions");
-      assert.equal(model.calls[9].messages.length, model.calls[8].messages.length + 2, "the conversation runs on");
+      assert.deepEqual(model.calls[10].tools, COMPANY_TOOLS, "the lesson's tools are gone");
+      assert.doesNotMatch(model.calls[10].messages[0].content, /THE LESSON/, "and so are its instructions");
+      assert.equal(model.calls[10].messages.length, model.calls[9].messages.length + 2, "the conversation runs on");
       model.answer({ content: "", tool_calls: [call("c10", "listen", {})] });
       assert.equal((await events.nextOf("status")).status, "listening");
       const still = await (await api("/teacher")).json();
