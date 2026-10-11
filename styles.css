@@ -1034,10 +1034,32 @@ kbd {
   accent-color: #e9a63a;
 }
 
-.transport .gear {
+.transport .gear,
+.transport .sound-toggle {
   width: 34px;
   min-width: 0;
   padding: 0;
+}
+
+/* The piano's sound: a speaker, struck through and lit while muted. */
+.sound-toggle {
+  display: grid;
+  place-items: center;
+}
+
+.sound-toggle .sound-toggle__off,
+.sound-toggle[aria-pressed="true"] .sound-toggle__on {
+  display: none;
+}
+
+.sound-toggle[aria-pressed="true"] .sound-toggle__off {
+  display: inline;
+}
+
+.transport .sound-toggle[aria-pressed="true"] {
+  border-color: var(--clay);
+  color: oklch(98% 0.01 84);
+  background: var(--clay);
 }
 
 /* The song's name at the bottom of the stage; clicking it changes the song. */

@@ -66,7 +66,7 @@ A hidden hand is not drawn and none of its keys move or light up; a hand an agen
 
 A note tied over from before is held, not played again: its finger stays down, its key stays down, and the sound that started the tie rings through it. Only the notes that are not tied over are struck.
 
-Step through the piece with the arrow keys or the ⇤ ← → buttons, or click a measure in the score. Each step sounds the notes struck at that moment. Space replays the moment together, Shift + Space one note at a time. **Finger numbers** (on the stage, or N) shows or hides the numbers over the keys.
+Step through the piece with the arrow keys or the ⇤ ← → buttons, or click a measure in the score. Each step sounds the notes struck at that moment. Space replays the moment together, Shift + Space one note at a time. **Finger numbers** (on the stage, or N) shows or hides the numbers over the keys. The speaker beside Play (or M) mutes the piano and turns it back on; while it is muted the speaker is struck through and lit, whoever muted it (the agent can too).
 
 Every workspace holds its own scores; none are shared by the whole site. A new workspace starts with a copy of each score named in `scores/starter.json`: the two that come with the app, both versions of Minor Descent, which were written for it. To change what newcomers start with, put a MusicXML file in `scores/` and add its name to that list. Bring in anything else with "Import a song…" (click the song's name); imported scores go into the workspace, in the server's data folder, and are not part of this repository.
 
