@@ -36,6 +36,7 @@ const DEFAULT_TEMPO = 120; // quarter notes a minute, for scores that do not sta
 const dropHint = document.querySelector("#drop-hint");
 const fullScreenButton = document.querySelector("#full-screen");
 const playScore = document.querySelector("#play-score");
+const soundToggle = document.querySelector("#sound-toggle");
 const tempoSlider = document.querySelector("#tempo");
 const tempoOutput = document.querySelector("#tempo-output");
 const tempoTicks = document.querySelector("#tempo-ticks");
@@ -1005,6 +1006,7 @@ function showChoices(choices) {
 }
 
 numbersToggle.addEventListener("change", () => ws.change({ numbers: numbersToggle.checked }));
+soundToggle.addEventListener("click", () => ws?.change({ sound: !ws.state.sound }));
 
 // Clicking a key plays it; if a finger sits on that key, the finger plays it.
 handsStage.addEventListener("noteon", (event) => {
@@ -1099,6 +1101,7 @@ window.addEventListener("keydown", (event) => {
   else if (event.key === "p" || event.key === "P") togglePlaying();
   else if (event.key === "c" || event.key === "C") handsView.toggleAutoCut();
   else if (event.key === "n" || event.key === "N") ws.change({ numbers: !ws.state.numbers });
+  else if (event.key === "m" || event.key === "M") ws.change({ sound: !ws.state.sound });
   else if (event.key === "f" || event.key === "F") setFullScreen(!page.fullScreen);
   else if (event.key === "Escape" && page.fullScreen) setFullScreen(false);
   else if (/^[1-9]$/.test(event.key)) handsView.goToShot(Number(event.key) - 1);
@@ -1176,6 +1179,10 @@ async function applyLatest() {
   if (state.sound !== shown.sound) {
     audio.setEnabled(state.sound);
     shown.sound = state.sound;
+    // Muted shows plainly, whoever muted it (the agent can too), so it is never a mystery.
+    soundToggle.setAttribute("aria-pressed", String(!state.sound));
+    soundToggle.title = state.sound ? "Sound is on: mute the piano (M)" : "Sound is off: turn the piano back on (M)";
+    soundToggle.setAttribute("aria-label", state.sound ? "Mute the piano" : "Turn the piano back on");
   }
   const lookKey = JSON.stringify(state.look);
   if (lookKey !== shown.look) {
