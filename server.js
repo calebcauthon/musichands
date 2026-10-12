@@ -480,23 +480,33 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
   };
 
   // The piece a workspace has open, read and fingered as the page has it,
-  // corrections and all. A piece is read once and kept for a while.
-  const parsedScores = new Map(); // score id → parsed
-  const music = async (record) => {
-    const xml = await scoreText(record);
-    const id = record.state.score.id;
-    if (!parsedScores.has(id)) {
-      parsedScores.set(id, parseScore(xml));
-      if (parsedScores.size > 8) parsedScores.delete(parsedScores.keys().next().value);
+  // corrections and all; or, named by `stand`, one of the workspace's own
+  // sheets (an agent's), with its resting fingers. Either is read once and
+  // kept for a while.
+  const parsedScores = new Map(); // score id, or workspace id + sheet id + its xml → parsed
+  const remember = (key, xml) => {
+    if (!parsedScores.has(key)) {
+      parsedScores.set(key, parseScore(xml));
+      if (parsedScores.size > 16) parsedScores.delete(parsedScores.keys().next().value);
     }
-    const parsed = parsedScores.get(id);
+    return parsedScores.get(key);
+  };
+  const music = async (record, stand = null) => {
+    const sheet = stand ? record.state.sheets[stand] : null;
+    if (stand && !sheet) throw new Error(`No sheet ${stand}`);
+    if (sheet) {
+      const parsed = remember(`${record.id}/${stand}/${createHash("sha256").update(sheet.xml, "utf8").digest("hex")}`, sheet.xml);
+      const fingered = assignFingering(parsed.events, { rests: sheet.rests });
+      return { score: parsed, events: fingered.events, positions: fingered.positions, tempo: parsed.tempo ?? 80, sheet: stand };
+    }
+    const parsed = remember(record.state.score.id, await scoreText(record));
     const events = applyHandMoves(parsed.events, record.state.corrections.hands);
     const fingered = assignFingering(events, { overrides: record.state.corrections.fingers });
-    return { score: parsed, events: fingered.events, positions: fingered.positions, tempo: parsed.tempo ?? 80 };
+    return { score: parsed, events: fingered.events, positions: fingered.positions, tempo: parsed.tempo ?? 80, sheet: null };
   };
-  // The agent: the teacher when a lesson is on, the companion the rest of the time.
+  // What is on the stand, as the page shows it: the piece, or the sheet put there.
   const screen = async (record) => {
-    const { score, events, positions } = await music(record);
+    const { score, events, positions } = await music(record, record.state.stand);
     return projectScreen(score, events, positions, record.state);
   };
   const notes = { read: (record) => workspaces.readNotes(record), write: (record, about, text) => workspaces.writeNotes(record, about, text) };
@@ -556,7 +566,7 @@ export function createAppServer(root = ROOT, { dataDir = process.env.DATA_DIR ??
     }
     if (part === "/screen" && request.method === "GET") {
       if (!record.state.score) return json(409, { error: "The workspace has no score open" });
-      const { score, events, positions } = await music(record);
+      const { score, events, positions } = await music(record, record.state.stand);
       return json(200, { workspace: { id: record.id, name: record.name, version: record.version }, ...projectScreen(score, events, positions, record.state), state: record.state });
     }
     if (part === "/score" && request.method === "GET") {

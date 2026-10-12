@@ -151,7 +151,7 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
       // A loop plays until the learner speaks; what they say comes back as the tool's answer, with the screen.
       model.answer({ content: "", tool_calls: [call("c3", "play", { from_measure: "1", to_measure: "2", until_moment: "", hands: "right", tempo: 40, times: 1, loop: true }), call("c4", "say", { text: "Keep going." })] });
       const play = await events.nextOf("act");
-      assert.deepEqual(play, { id: "4", type: "play", from: 0, to: 1, start: null, end: null, hands: "right", tempo: 40, times: null, loop: true });
+      assert.deepEqual(play, { id: "4", type: "play", stand: null, at: 0, from: 0, to: 1, start: null, end: null, hands: "right", tempo: 40, times: null, loop: true });
       await api("/teacher/say", "POST", { text: "Too fast, slow down." });
       assert.deepEqual(await events.nextOf("cut"), { id: "4" });
       await events.nextOf("status");
@@ -203,22 +203,38 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
       assert.match(JSON.parse(model.calls[8].messages.at(-2).content).error, /No moment 9:9/);
       assert.match(last(model).error, /No such tool now: teach/);
 
-      // Freehand: the passage reaches the screen as whole-hand poses in ms at the tempo, with the hands to show; a hand it cannot do is an error.
+      // A sheet of the agent's own: written and kept in the workspace with its rests, put on the stand, played by its own measures; a hand it cannot do is an error.
       const notes = [{ keys: [{ finger: 1, note: "A4" }], beats: 1 }, { keys: [{ finger: 2, note: "B4" }], beats: 0.5 }];
-      model.answer({ content: "", tool_calls: [call("c8c", "play_notes", { tempo: 120, hands: "right", right: { notes } }), call("c8d", "play_notes", { tempo: 60, hands: "right", right: { notes: [{ keys: [{ finger: 6, note: "A4" }], beats: 1 }] } })] });
-      const freehand = await events.nextOf("act");
-      const whole = [{ finger: 1, note: "A4" }, { finger: 2, note: "B4" }];
-      assert.deepEqual(freehand, {
-        id: freehand.id,
-        type: "play_notes",
-        tempo: 120,
-        hands: "right",
-        steps: [{ ms: 0, right: { fingers: whole, press: ["A4"], hold: 500 } }, { ms: 500, right: { fingers: whole, press: ["B4"], hold: 250 } }, { ms: 750, right: { fingers: whole, press: [] } }],
+      model.answer({
+        content: "",
+        tool_calls: [
+          call("c8c", "write_sheet", { title: "Two notes", tempo: 120, right: { position: [{ finger: 1, note: "A4" }, { finger: 5, note: "E5" }], notes }, show: true }),
+          call("c8d", "write_sheet", { title: "Wrong", right: { notes: [{ keys: [{ finger: 6, note: "A4" }], beats: 1 }] } }),
+          call("c8e", "play", { sheet: "s1", from_measure: "1", to_measure: "1", hands: "right", tempo: 100, times: 1, loop: false }),
+        ],
       });
-      await api("/teacher/done", "POST", { id: freehand.id, result: { played: true } });
+      const sheetPlay = await events.nextOf("act");
+      assert.deepEqual(sheetPlay, { id: sheetPlay.id, type: "play", stand: "s1", at: 0, from: 0, to: 0, start: null, end: null, hands: "right", tempo: 100, times: 1, loop: false });
+      const withSheet = await state();
+      assert.equal(withSheet.stand, "s1");
+      assert.equal(withSheet.sheets.s1.title, "Two notes");
+      assert.deepEqual(withSheet.sheets.s1.rests, { "1:1": { right: [{ finger: 5, note: "E5" }] }, "1:2": { right: [{ finger: 1, note: "A4" }, { finger: 5, note: "E5" }] } });
+      assert.match(withSheet.sheets.s1.xml, /<fingering>2<\/fingering>/);
+      await api("/teacher/done", "POST", { id: sheetPlay.id, result: { played: true } });
       await events.nextOf("status");
-      assert.deepEqual(last(model, 2), { played: true });
-      assert.match(last(model).error, /right hand, note 1: finger 6 on A4/);
+      assert.deepEqual(last(model), { played: true });
+      const written = last(model, 3);
+      assert.equal(written.sheet, "s1");
+      assert.equal(written.on_stand, true);
+      assert.match(written.brief, /Sits at the start with: thumb on A4, pointer on B4, pinky on E5/);
+      assert.match(last(model, 2).error, /right hand, note 1: finger 6 on A4/);
+      // The screen line says what is on the stand, and a sheet is not corrected but rewritten.
+      model.answer({ content: "", tool_calls: [call("c8f", "change_fingering", { moment: "1:1", hand: "right", note: "A4", finger: 2, everywhere: false }), call("c8g", "screen", { sheet: "piece", measure: "2" })] });
+      await events.nextOf("status");
+      assert.match(JSON.parse(model.calls.at(-1).messages.at(-2).content).error, /Sheet s1 is on the stand/);
+      assert.match(last(model).screen, /^Screen: measure 2, beat 1/);
+      assert.equal((await state()).stand, null);
+      assert.equal((await state()).sheets.s1.time, 0, "the sheet keeps its own place");
 
       // Done: the last word is spoken, the piece is put back, and the agent is simply there again.
       model.answer({ content: "", tool_calls: [call("c9", "done", { closing: "That's it for today." })] });
@@ -231,11 +247,11 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
       assert.equal(after.passage, null);
       assert.deepEqual(after.hands, { left: { show: true, sound: true }, right: { show: true, sound: true } });
       await events.nextOf("status");
-      assert.equal(model.calls.length, 11, "the model is told the lesson is over");
+      assert.equal(model.calls.length, 12, "the model is told the lesson is over");
       assert.match(last(model).now, /the lesson is over/);
-      assert.deepEqual(model.calls[10].tools, COMPANY_TOOLS, "the lesson's tools are gone");
-      assert.doesNotMatch(model.calls[10].messages[0].content, /THE LESSON/, "and so are its instructions");
-      assert.equal(model.calls[10].messages.length, model.calls[9].messages.length + 2, "the conversation runs on");
+      assert.deepEqual(model.calls[11].tools, COMPANY_TOOLS, "the lesson's tools are gone");
+      assert.doesNotMatch(model.calls[11].messages[0].content, /THE LESSON/, "and so are its instructions");
+      assert.equal(model.calls[11].messages.length, model.calls[10].messages.length + 2, "the conversation runs on");
       model.answer({ content: "", tool_calls: [call("c10", "listen", {})] });
       assert.equal((await events.nextOf("status")).status, "listening");
       const still = await (await api("/teacher")).json();

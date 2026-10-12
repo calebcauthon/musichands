@@ -1,26 +1,29 @@
-// The agent's freehand playing: a passage it writes itself, not in the score.
-// Each hand gets its notes in order — the keys struck with their fingers, how
-// many beats each lasts, and when one does not follow straight on, the beat
-// it begins on — and, if the agent wants the hand to hold still, a POSITION:
-// where every finger rests, pressed or not. The passage is fingered the way a
-// score is (fingering.js), so a run of notes under one hand becomes one steady
-// position with all its keys, and the agent's position is laid over that. What
-// comes out is the poses the screen plays one after another (workspace-model.js:
-// pose), each with the whole hand on its keys and the struck ones pressed.
-import { assignFingering } from "./fingering.js";
+// Sheet music of the agent's own: a passage it writes itself, not in the
+// piece. Each hand gets its notes in order — the keys struck with their
+// fingers, how many beats each lasts, and when one does not follow straight
+// on, the beat it begins on — and, if the agent wants the hand to hold still,
+// a POSITION: where every finger rests, pressed or not. What comes out is a
+// sheet as the workspace keeps it (workspace-model.js: sheets): the passage
+// as MusicXML, which the page draws and plays like any score, and the
+// resting fingers at each moment, which the fingering (fingering.js) lays
+// under the hand so that it sits where the agent said.
 import { noteToMidi } from "./hand-model.js";
-import { FINGER_SHORT } from "./lesson.js";
+import { FINGER_SHORT, momentName } from "./lesson.js";
+import { parseScore } from "./score-model.js";
+import { writeScore } from "./score-writer.js";
 
-export const MOST_NOTES = 64; // notes one hand may play in a run
+export const MOST_NOTES = 64; // notes one hand may play in a sheet
 const HANDS = ["right", "left"];
 const NOTE = /^[A-G][#b]?-?\d$/;
 const LEAST_BEATS = 0.25;
 const MOST_BEATS = 8;
 const REACH = 14; // semitones a hand stretches, thumb to pinky
 const FINGER = /^[1-5]$/;
+const METERS = [2, 3, 4, 6];
 
 const fingerName = (finger) => FINGER_SHORT[finger] ?? `finger ${finger}`;
 const onKey = (entry) => `${fingerName(entry.finger)} on ${entry.note}`;
+const beatName = (time) => String(Math.round((time + 1) * 100) / 100);
 
 // Fingers on keys as given, or why they are not: each a finger (1 to 5) on a
 // note (C4, F#3, Bb2), no finger on two keys, no key under two fingers.
@@ -51,9 +54,9 @@ function awkward(fingers, hand) {
   return null;
 }
 
-// The hand's notes as a timeline of events, or why they are not.
-function readHand(hand, given, hands) {
-  if (hands !== "both" && hands !== hand) return { error: `the ${hand} hand has notes, but hands is "${hands}": name it among the hands, or leave its notes out` };
+// The hand's notes as a timeline of events, each with the position in force
+// from it on, or why they are not.
+function readHand(hand, given) {
   const where = (index) => `${hand} hand, note ${index + 1}`;
   const start = readFingers(given.position ?? [], `${hand} hand, position`);
   if (start.error) return start;
@@ -62,31 +65,28 @@ function readHand(hand, given, hands) {
   if (trouble) return { error: `${hand} hand, position: ${trouble}` };
   const notes = Array.isArray(given.notes) ? given.notes : [];
   if (!notes.length) return { error: `the ${hand} hand has no notes` };
-  if (notes.length > MOST_NOTES) return { error: `the ${hand} hand has ${notes.length} notes; ${MOST_NOTES} at most in one run` };
+  if (notes.length > MOST_NOTES) return { error: `the ${hand} hand has ${notes.length} notes; ${MOST_NOTES} at most in one sheet` };
   const events = [];
   let cursor = 0; // beats from the start, where the next note begins unless it says
-  notes.forEach((note, index) => {
-    if (events.at(-1)?.error) return;
+  for (const [index, note] of notes.entries()) {
     const keys = readFingers(note?.keys, where(index));
-    if (keys.error) return events.push(keys);
-    if (!keys.fingers.length) return events.push({ error: `${where(index)}: no keys` });
+    if (keys.error) return keys;
+    if (!keys.fingers.length) return { error: `${where(index)}: no keys` };
     trouble = awkward(keys.fingers, hand);
-    if (trouble) return events.push({ error: `${where(index)}: ${trouble}` });
+    if (trouble) return { error: `${where(index)}: ${trouble}` };
     if (note.position !== undefined) {
-      const given = readFingers(note.position, `${where(index)}, position`);
-      if (given.error) return events.push(given);
-      trouble = awkward(given.fingers, hand);
-      if (trouble) return events.push({ error: `${where(index)}, position: ${trouble}` });
-      position = given.fingers;
+      const fresh = readFingers(note.position, `${where(index)}, position`);
+      if (fresh.error) return fresh;
+      trouble = awkward(fresh.fingers, hand);
+      if (trouble) return { error: `${where(index)}, position: ${trouble}` };
+      position = fresh.fingers;
     }
     const at = note.at === undefined || note.at === null ? cursor : Number(note.at) - 1;
-    if (!(at >= 0)) return events.push({ error: `${where(index)}: "at" is the beat it begins on, counted from one` });
+    if (!(at >= 0)) return { error: `${where(index)}: "at" is the beat it begins on, counted from one` };
     const beats = Math.min(MOST_BEATS, Math.max(LEAST_BEATS, Number(note.beats) || 1));
-    events.push({ hand, time: at, duration: beats, measure: "1", beat: at + 1, notes: keys.fingers, position });
+    events.push({ hand, time: at, duration: beats, notes: keys.fingers, position });
     cursor = at + beats;
-  });
-  const failed = events.find((event) => event.error);
-  if (failed) return failed;
+  }
   // In time order; a note lasts until the next one of the hand begins, at most.
   events.sort((a, b) => a.time - b.time);
   for (let index = 0; index + 1 < events.length; index += 1) {
@@ -98,70 +98,50 @@ function readHand(hand, given, hands) {
   return { events };
 }
 
-const beatName = (time) => String(Math.round((time + 1) * 100) / 100);
-
-// The whole hand for one event: every key the hand's position covers, the
-// agent's position laid over that, and the struck keys under their fingers.
-function wholeHand(event, position, hand) {
-  const byFinger = new Map();
-  for (const entry of position.fingers) byFinger.set(entry.finger, { finger: entry.finger, note: entry.note, midi: noteToMidi(entry.note) });
-  for (const entry of event.position) byFinger.set(entry.finger, entry);
-  for (const entry of event.notes) byFinger.set(entry.finger, entry);
-  // A resting finger gives up a key that is struck by another.
-  const struck = new Map(event.notes.map((entry) => [entry.note, entry.finger]));
-  for (const [finger, entry] of byFinger) if (struck.has(entry.note) && struck.get(entry.note) !== finger) byFinger.delete(finger);
-  const fingers = [...byFinger.values()].sort((a, b) => a.finger - b.finger);
-  const trouble = awkward(fingers, hand);
-  if (trouble) return { error: `${hand} hand, beat ${beatName(event.time)}: ${trouble}; give the hand a new position from that note` };
-  return { fingers: fingers.map(({ finger, note }) => ({ finger, note })) };
+// Where the hand's fingers rest at a moment of the written sheet: the
+// position in force there, less any finger or key the moment plays. The
+// whole hand — played and resting — must be one a hand can hold.
+function restsAt(event, written, hand) {
+  const position = written.filter((entry) => entry.time <= event.time + 1e-6).at(-1)?.position ?? [];
+  const played = event.notes.map((note) => ({ finger: note.finger, note: note.note, midi: note.midi }));
+  const keys = new Set(played.map((entry) => entry.midi));
+  const fingers = new Set(played.map((entry) => entry.finger));
+  const resting = position.filter((entry) => !keys.has(entry.midi) && !fingers.has(entry.finger));
+  const trouble = awkward([...played, ...resting], hand);
+  if (trouble) return { error: `${hand} hand, ${momentName(event)}: ${trouble}; give the hand a new position from that note` };
+  return { resting: resting.map(({ finger, note }) => ({ finger, note })) };
 }
 
-// The passage as the screen plays it: { tempo, hands, steps }, each step at
-// so many ms from the start with, for each hand that changes then, the whole
-// hand (fingers), the keys struck (press) and how long they sound (hold); a
-// hand whose note has ended is lifted (press []) where it sits. Or { error }.
-export function freehandSteps(args = {}) {
-  const tempo = Math.min(240, Math.max(30, Math.round(Number(args.tempo) || 0))) || 60;
-  const hands = ["right", "left", "both"].includes(args.hands) ? args.hands : null;
-  if (!hands) return { error: 'hands must be "right", "left" or "both": the hands seen and heard while it plays' };
-  const events = [];
+// The sheet as the workspace keeps it — { title, xml, rests, measures } —
+// or { error }. args: title, tempo, beats_per_measure, and right/left as
+// { position, notes: [{ keys, beats, at, position }] }.
+export function writeSheet(args = {}) {
+  const title = String(args.title ?? "").trim().slice(0, 80);
+  if (!title) return { error: "Give the sheet a title" };
+  const tempo = args.tempo === undefined || args.tempo === null ? null : Math.min(240, Math.max(30, Math.round(Number(args.tempo) || 0))) || null;
+  const meter = Number(args.beats_per_measure ?? 4);
+  if (!METERS.includes(meter)) return { error: `beats_per_measure must be one of ${METERS.join(", ")}` };
+  const written = {};
   for (const hand of HANDS) {
     if (args[hand] === undefined || args[hand] === null) continue;
     if (typeof args[hand] !== "object") return { error: `${hand} must be { position, notes }` };
-    const read = readHand(hand, args[hand], hands);
+    const read = readHand(hand, args[hand]);
     if (read.error) return read;
-    events.push(...read.events);
+    written[hand] = read.events;
   }
-  if (!events.length) return { error: "No notes to play: give right and/or left their notes" };
-  events.sort((a, b) => a.time - b.time || (a.hand === "right" ? -1 : 1));
+  if (!Object.keys(written).length) return { error: "No notes to write: give right and/or left their notes" };
 
-  // Fingered like a score, so a run under one hand is one steady position.
-  const fingered = assignFingering(events);
-  const whole = new Map(); // event → the whole hand at it
-  for (const hand of HANDS) {
-    for (const position of fingered.positions[hand]) {
-      for (const event of position.events) {
-        const result = wholeHand(event, position, hand);
-        if (result.error) return result;
-        whole.set(event, result.fingers);
-      }
-    }
+  const parts = Object.fromEntries(Object.entries(written).map(([hand, events]) => [hand, events.map((event) => ({ time: event.time, duration: event.duration, notes: event.notes.map(({ note, finger }) => ({ note, finger })) }))]));
+  const xml = writeScore({ title, tempo, beatsPerMeasure: meter, parts });
+  // Read back as the page will read it, so the rests go by its moments.
+  const parsed = parseScore(xml);
+  const rests = {};
+  for (const event of parsed.events) {
+    const result = restsAt(event, written[event.hand] ?? [], event.hand);
+    if (result.error) return result;
+    if (!result.resting.length) continue;
+    rests[momentName(event)] ??= {};
+    rests[momentName(event)][event.hand] = result.resting;
   }
-
-  const ms = (beats) => Math.round((beats * 60000) / tempo);
-  const times = [...new Set(events.flatMap((event) => [event.time, event.time + event.duration]).map((time) => Math.round(time * 1000) / 1000))].sort((a, b) => a - b);
-  const steps = times.map((time) => {
-    const step = { ms: ms(time) };
-    for (const hand of HANDS) {
-      const begins = events.find((event) => event.hand === hand && Math.abs(event.time - time) < 1e-6);
-      if (begins) {
-        step[hand] = { fingers: whole.get(begins), press: begins.notes.map((entry) => entry.note), hold: ms(begins.duration) };
-        continue;
-      }
-      const ends = events.find((event) => event.hand === hand && Math.abs(event.time + event.duration - time) < 1e-6);
-      if (ends) step[hand] = { fingers: whole.get(ends), press: [] };
-    }
-    return step;
-  });
-  return { tempo, hands, steps };
+  return { title, xml, rests, measures: parsed.measures.length };
 }

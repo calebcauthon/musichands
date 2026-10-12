@@ -71,6 +71,8 @@ the workspace holds (see "Scores"). `state` is the whole screen:
   "sound":   true,
   "look":    { "piano": "ebony", "build": "man", "skin": "fair", "outfit": "suit", "gloves": "none", "scene": "stage" },
   "corrections": { "fingers": {}, "hands": {} },
+  "sheets":  {},
+  "stand":   null,
   "command": null
 }
 ```
@@ -95,6 +97,8 @@ the workspace holds (see "Scores"). `state` is the whole screen:
 | `passage` | The measures Play keeps to, or `null` for the piece from here on: `{ "from": <measure index>, "to": <measure index>, "times": <how many times through, or null for over and over> }`, with optional `"start"` and `"end"` (quarter notes from the beginning of the piece) to keep it to part of those measures. Measure indexes count from 0. See "Playing a passage". |
 | `pose` | A hand put where you say, not where the score has it: `{ "left": null \| { "fingers": [{ "finger": 1–5, "note": "C4" }], "press": ["C4"] }, "right": … }`. See "Posing a hand". |
 | `lesson` | The lesson under way, or `null`: `{ mode, from, to, score, … }`. The workspace stores it as given; the page's learning modules and the teacher read it. See "Lessons". |
+| `sheets` | Sheet music of your own, by id: `{ "<id>": { "title", "xml", "rests", "time" } }`. Twelve at most; the oldest goes. See "Sheet music of your own". |
+| `stand` | What the notation and the hands show: `null` for the piece, or the id of one of `sheets`. |
 
 Every value is checked on the way in. Out-of-range numbers are clamped, and
 anything the page cannot show is dropped, so read the response to see what
@@ -198,9 +202,8 @@ pressed keys as the pose arrives, and leaves the rest of the screen alone;
 is not playing. Two optional fields make a run of poses play like music:
 `hold`, how long the pressed keys sound in ms (1500 if left out), and `step`,
 any integer that changes from one pose to the next, so the same keys pressed
-twice in a row are struck twice. The agent's freehand playing is poses like
-that, one per step. The lesson's placement phase writes poses finger by finger
-as the voice names them; you can do the same:
+twice in a row are struck twice. The lesson's placement phase writes poses
+finger by finger as the voice names them; you can do the same:
 
 ```sh
 curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
@@ -210,6 +213,45 @@ curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
 curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
   -d '{"pose": {"right": null}}' $BASE/api/workspaces/$WS
 ```
+
+## Sheet music of your own
+
+The piece is not the only music a workspace can show. `sheets` holds short
+pieces an agent writes — a scale, a chord, a bar of the piece with another
+fingering — and `stand` says which is on the stand: `null` for the piece, or a
+sheet's id. The page draws and plays what is on the stand like any score,
+cursor and all, and each sheet keeps its own `time`, so going back to the
+piece finds it where it was. `passage` and `pose` are about what is on the
+stand; `corrections` are the piece's only.
+
+A sheet is `{ "title", "xml", "rests", "time" }`: its name, the music as
+MusicXML (one piano part on two staves, the right hand on the upper, with
+`<fingering>` on the notes you want fingered), where the fingers rest, and its
+place. `rests` is `{ "<moment>": { "<hand>": [{ "finger", "note" }] } }`: at
+that moment, the keys the hand covers without playing them, so the whole
+hand is placed and holds still — the hand sits on them exactly as the hand
+sits on the position it plays. A rest on a key or finger the moment plays is
+dropped. Ids are short lowercase names (`s1`, `scale`, …); twelve are kept and
+the oldest goes. The server's teacher writes its sheets this way from a few
+notes per hand (`write_sheet`); over the API you write the MusicXML yourself,
+and `score-writer.js` shows the shape it reads.
+
+```sh
+# Put a sheet in the workspace and on the stand, at its start
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"sheets": {"scale": {"title": "C major, one octave", "xml": "<score-partwise …", "rests": {}, "time": 0}}, "stand": "scale", "passage": null, "playing": false}' $BASE/api/workspaces/$WS
+# Play it from the top, once
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' \
+  -d '{"sheets": {"scale": {"time": 0}}, "playing": true}' $BASE/api/workspaces/$WS
+# The piece comes back, where it was
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' -d '{"stand": null}' $BASE/api/workspaces/$WS
+# A sheet taken away leaves the stand to the piece
+curl -s -X PATCH -H "$AUTH" -H 'content-type: application/json' -d '{"sheets": {"scale": null}}' $BASE/api/workspaces/$WS
+```
+
+`GET …/screen` reads what is on the stand, and says so in `stand`
+(`{ sheet, title }`, or `null` for the piece); measures and moments in it are
+the sheet's own, from 1:1.
 
 ## Lessons
 

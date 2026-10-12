@@ -24,6 +24,8 @@ export function defaultState() {
     lesson: null, // the learning module's own record of the lesson under way (learning.js), kept as given and never read here
     passage: null, // { from, to, times, start?, end? }: the measures Play plays (or the part of them between two times), and how many times (null: over and over), instead of the piece from here on
     pose: { left: null, right: null }, // a hand put where it is told, not where the score has it: { fingers: [{ finger, note }], press: [note], hold?, step? }
+    sheets: {}, // sheet music of an agent's own, by id: { title, xml, rests, time }; each keeps its own place (time), like the piece does
+    stand: null, // what the notation and the hands show: null for the piece, or the id of one of the sheets
     command: null, // { seq, type }: the last thing an agent asked the page to do
   };
 }
@@ -116,6 +118,48 @@ export function cleanPose(value) {
   return pose;
 }
 
+// Fingers resting on keys at moments of a sheet, pressed or not: { "measure:beat": { hand: [{ finger, note }] } }.
+export function cleanRests(value) {
+  if (!isObject(value)) return {};
+  const clean = {};
+  for (const [moment, hands] of Object.entries(value)) {
+    if (!MOMENT.test(moment) || !isObject(hands)) continue;
+    for (const hand of ["left", "right"]) {
+      const fingers = cleanPose({ fingers: hands[hand] })?.fingers;
+      if (!fingers) continue;
+      clean[moment] ??= {};
+      clean[moment][hand] = fingers;
+    }
+  }
+  return clean;
+}
+
+// Sheet music an agent wrote, kept in the workspace by id: a title, the
+// MusicXML, where the fingers rest at each moment, and its own place in it.
+export const MOST_SHEETS = 12;
+const SHEET_ID = /^[a-z][a-z0-9-]{0,23}$/;
+const MOST_SHEET_XML = 60000; // characters
+export function cleanSheet(value) {
+  if (!isObject(value) || typeof value.xml !== "string" || !value.xml.trim() || value.xml.length > MOST_SHEET_XML) return null;
+  return {
+    title: String(value.title ?? "").trim().slice(0, 80) || "Untitled",
+    xml: value.xml,
+    rests: cleanRests(value.rests),
+    time: Number.isFinite(value.time) ? Math.max(0, value.time) : 0,
+  };
+}
+export function cleanSheets(value) {
+  if (!isObject(value)) return {};
+  const clean = {};
+  for (const [id, entry] of Object.entries(value)) {
+    const sheet = SHEET_ID.test(id) ? cleanSheet(entry) : null;
+    if (sheet) clean[id] = sheet;
+  }
+  // The oldest go when there are too many.
+  for (const id of Object.keys(clean).slice(0, Math.max(0, Object.keys(clean).length - MOST_SHEETS))) delete clean[id];
+  return clean;
+}
+
 // Whatever was stored or sent, made into a state the page can show.
 export function cleanState(value) {
   const base = defaultState();
@@ -153,6 +197,8 @@ export function cleanState(value) {
   state.lesson = cleanBlob(value.lesson);
   state.passage = cleanPassage(value.passage);
   if (isObject(value.pose)) for (const hand of ["left", "right"]) state.pose[hand] = cleanPose(value.pose[hand]);
+  state.sheets = cleanSheets(value.sheets);
+  if (typeof value.stand === "string" && state.sheets[value.stand]) state.stand = value.stand;
   if (isObject(value.command) && COMMANDS.includes(value.command.type)) {
     state.command = { seq: Number(value.command.seq) || 0, type: value.command.type, by: String(value.command.by ?? "") };
   }
@@ -180,11 +226,21 @@ export function mergeState(state, patch) {
   return cleanState(merged);
 }
 
+// The place kept by what is on the stand: the piece's own, or the sheet's.
+export function standTime(state) {
+  return state.stand ? (state.sheets[state.stand]?.time ?? 0) : state.time;
+}
+
+// The change that moves what is on the stand to `time`.
+export function standTimePatch(state, time, stand = state.stand) {
+  return stand ? { sheets: { [stand]: { time } } } : { time };
+}
+
 // The screen as a summary an agent can read: what moment is shown, what each
 // hand is doing there, and what has been corrected.
 export function projectScreen(score, events, positions, state) {
   const steps = [...new Set(events.filter((event) => event.attack).map((event) => event.time))].sort((a, b) => a - b);
-  const at = steps.filter((time) => time <= state.time + 1e-6).at(-1) ?? steps[0] ?? 0;
+  const at = steps.filter((time) => time <= standTime(state) + 1e-6).at(-1) ?? steps[0] ?? 0;
   const here = events.filter((event) => event.time === at);
   const hands = {};
   for (const hand of ["right", "left"]) {
@@ -201,6 +257,7 @@ export function projectScreen(score, events, positions, state) {
   const first = here[0];
   return {
     score: { title: score.title, measures: score.measures.length, tempo: score.tempo },
+    stand: state.stand ? { sheet: state.stand, title: state.sheets[state.stand]?.title ?? "" } : null,
     time: at,
     measure: first?.measure ?? null,
     beat: first?.beat ?? null,

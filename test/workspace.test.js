@@ -7,7 +7,7 @@ import { applyHandMoves, countCorrections, matchingMoments, withCorrection } fro
 import { assignFingering } from "../fingering.js";
 import { createAppServer, elevenLabsVoice } from "../server.js";
 import { parseConnection, workspaceFromHash } from "../workspace-client.js";
-import { cleanPassage, cleanPose, cleanState, defaultState, mergeState, projectScreen } from "../workspace-model.js";
+import { cleanPassage, cleanPose, cleanSheets, cleanState, defaultState, mergeState, MOST_SHEETS, projectScreen, standTime, standTimePatch } from "../workspace-model.js";
 
 const event = (measure, beat, hand, midis) => ({ measure: String(measure), beat, hand, time: (measure - 1) * 4 + beat - 1, duration: 1, attack: true, notes: midis.map((midi) => ({ midi, note: `n${midi}`, duration: 1 })) });
 
@@ -416,4 +416,31 @@ test("the voice reads only a few lines at once, in order, and asks again when re
   assert.deepEqual(started.slice(0, 2), ["one", "two"], "in the order asked");
   assert.equal(elevenLabsVoice({ key: "" }), null, "no key, no voice");
   await assert.rejects(elevenLabsVoice({ key: "k", request: async () => ({ ok: false, status: 401 }) })("x"), /answered 401/);
+});
+
+test("an agent's sheets are kept by id with their rests and their own place; the stand names one or the piece", () => {
+  const xml = "<score-partwise/>";
+  const sheets = cleanSheets({
+    s1: { title: " Scale ", xml, rests: { "1:1": { right: [{ finger: 1, note: "C4" }, { finger: 9, note: "D4" }], left: "no" }, bad: {} }, time: 2 },
+    s2: { xml: "" },
+    "Bad Id": { xml },
+    s3: { xml, time: -1 },
+  });
+  assert.deepEqual(sheets, { s1: { title: "Scale", xml, rests: { "1:1": { right: [{ finger: 1, note: "C4" }] } }, time: 2 }, s3: { title: "Untitled", xml, rests: {}, time: 0 } });
+  const many = Object.fromEntries(Array.from({ length: MOST_SHEETS + 2 }, (_, index) => [`s${index + 1}`, { xml }]));
+  assert.deepEqual(Object.keys(cleanSheets(many)), Object.keys(many).slice(2), "the oldest go when there are too many");
+
+  const state = cleanState({ sheets: { s1: { xml, time: 3 } }, stand: "s1", time: 7 });
+  assert.equal(state.stand, "s1");
+  assert.equal(cleanState({ stand: "s9" }).stand, null, "the stand names a sheet the workspace has");
+  assert.equal(standTime(state), 3, "the sheet's own place");
+  assert.deepEqual(standTimePatch(state, 5), { sheets: { s1: { time: 5 } } });
+  assert.deepEqual(standTimePatch(state, 5, null), { time: 5 });
+  const back = mergeState(state, { stand: null });
+  assert.equal(back.stand, null);
+  assert.equal(standTime(back), 7, "the piece kept its place meanwhile");
+  assert.deepEqual(standTimePatch(back, 1), { time: 1 });
+  const gone = mergeState(state, { sheets: { s1: null } });
+  assert.deepEqual(gone.sheets, {});
+  assert.equal(gone.stand, null, "a sheet taken away leaves the stand to the piece");
 });

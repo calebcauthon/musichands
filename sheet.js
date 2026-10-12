@@ -18,11 +18,12 @@ import { parseScore } from "./score-model.js";
 import { bandAt, stripHeight, stripScroll, systemBands } from "./score-strip.js";
 import { ScoreTransport } from "./score-transport.js";
 import { homeWorkspace, keepHomeWorkspace, WorkspaceClient, workspaceFromHash } from "./workspace-client.js";
-import { LIMITS } from "./workspace-model.js";
+import { LIMITS, standTime, standTimePatch } from "./workspace-model.js";
 
 const songList = document.querySelector("#song-list");
 const scoreFile = document.querySelector("#score-file");
 const scoreTitle = document.querySelector("#score-title");
+const standBack = document.querySelector("#stand-back");
 const removeScore = document.querySelector("#remove-score");
 const dialogs = { song: document.querySelector("#song-dialog"), settings: document.querySelector("#settings-dialog") };
 const scoreContainer = document.querySelector("#score-container");
@@ -49,15 +50,16 @@ const bar = {
   string: document.querySelector("#workspace-string"),
 };
 
-// What the page has worked out from the workspace: the score as read, its
-// fingering, and the transient things only this browser knows (which keys the
-// pointer holds, what a replay is sounding).
+// What the page has worked out from the workspace: the piece as read and
+// fingered, a sheet of an agent's own when one is on the stand, and the
+// transient things only this browser knows (which keys the pointer holds,
+// what a replay is sounding). `score`, `xml`, `events`, `positions` and
+// `steps` are those of what is on the stand: the sheet, or else the piece.
+const NO_MUSIC = () => ({ score: null, xml: null, events: [], steps: [], positions: { right: [], left: [] } });
 const page = {
-  score: null,
-  xml: null,
-  events: [],
-  steps: [],
-  positions: { right: [], left: [] },
+  ...NO_MUSIC(),
+  piece: NO_MUSIC(), // the piece, with the workspace's corrections
+  sheet: null, // the sheet on the stand, read and fingered: { id, ...music }, or null
   stepIndex: 0,
   osmd: null,
   showGuides: true,
@@ -161,21 +163,21 @@ function momentAt(step) {
   return moment;
 }
 
-// Works the fingering out again from the score and the workspace's corrections.
-function refinger(corrections) {
-  const moved = applyHandMoves(page.score.events, corrections.hands);
-  const fingered = assignFingering(moved, { overrides: corrections.fingers });
-  page.events = fingered.events;
-  page.positions = fingered.positions;
-  page.steps = buildSteps(page.events);
+// A score as the page plays it: its events fingered (with the workspace's
+// corrections for the piece, or a sheet's resting fingers), its hand
+// positions, and its steps with what each hand does at each.
+function buildMusic(score, { corrections = null, rests = {} } = {}) {
+  const moved = corrections ? applyHandMoves(score.events, corrections.hands) : score.events;
+  const fingered = assignFingering(moved, { overrides: corrections?.fingers ?? {}, rests });
+  const music = { events: fingered.events, positions: fingered.positions, steps: buildSteps(fingered.events) };
   // Build once in score order. Playback used to rescan the complete score and
   // position lists several times per note, making long pieces progressively slow.
   for (const hand of HANDS) {
-    const events = page.events.filter((event) => event.hand === hand);
-    const positions = page.positions[hand];
+    const events = music.events.filter((event) => event.hand === hand);
+    const positions = music.positions[hand];
     let eventIndex = -1;
     let positionIndex = -1;
-    for (const step of page.steps) {
+    for (const step of music.steps) {
       while (eventIndex + 1 < events.length && events[eventIndex + 1].time <= step.time) eventIndex++;
       while (positionIndex + 1 < positions.length && positions[positionIndex + 1].startTime <= step.time) positionIndex++;
       step.moment ??= {};
@@ -187,14 +189,55 @@ function refinger(corrections) {
       step.moment[hand] = { position, event, sounding: current ? event.notes.map((note) => note.midi) : [], struck, striking: struck.length > 0 };
     }
   }
+  return music;
 }
+
+// Works the piece's fingering out again from the score and the workspace's corrections.
+function refinger(corrections) {
+  Object.assign(page.piece, buildMusic(page.piece.score, { corrections }));
+  if (!page.sheet) mount();
+}
+
+// Puts a sheet of the workspace's on the stand (null: the piece), read and
+// fingered with its resting fingers. A sheet that cannot be read leaves the piece there.
+function takeStand(id, sheet) {
+  page.sheet = null;
+  if (id && sheet) {
+    try {
+      const score = parseScore(sheet.xml);
+      page.sheet = { id, score, xml: sheet.xml, ...buildMusic(score, { rests: sheet.rests }) };
+    } catch (error) {
+      console.warn(`MusicHands: sheet ${id} could not be read.`, error);
+    }
+  }
+  mount();
+}
+
+// What is on the stand becomes what the page shows and plays.
+function mount() {
+  const music = page.sheet ?? page.piece;
+  for (const key of Object.keys(NO_MUSIC())) page[key] = music[key];
+  page.measureShown = null;
+  page.cursorAt = null;
+  const title = page.score?.title ?? "";
+  scoreTitle.textContent = page.sheet ? `♪ ${title}` : title;
+  scoreTitle.title = page.sheet ? "A sheet the agent wrote. Click to change the song" : "Change the song, or bring in another";
+  standBack.hidden = !page.sheet;
+  standBack.textContent = page.sheet ? `Back to ${page.piece.score?.title ?? "the piece"}` : "";
+  document.title = `MusicHands — ${title}`;
+  if (page.score) showSummary();
+}
+
+// The piece comes back on the stand.
+standBack.addEventListener("click", () => ws?.change({ stand: null, playing: false, passage: null, pose: { left: null, right: null } }));
 
 // Fetches and reads one of the workspace's scores. Returns false if it cannot.
 async function loadScore(score) {
   stopTransport();
+  page.sheet = null;
   if (!score) {
-    page.score = null;
-    page.xml = null;
+    page.piece = NO_MUSIC();
+    mount();
     scoreTitle.textContent = "No score yet";
     document.title = "MusicHands — Sheet Music";
     scoreContainer.replaceChildren();
@@ -206,24 +249,27 @@ async function loadScore(score) {
   let xml;
   try {
     xml = await ws.readScore(score.id);
-    page.score = parseScore(xml);
+    page.piece = { ...NO_MUSIC(), score: parseScore(xml), xml };
   } catch (error) {
-    page.score = null;
+    page.piece = NO_MUSIC();
+    mount();
     setStatus(`Could not read ${label}: ${error.message}`, "outside");
     return false;
   }
-  page.xml = xml;
   page.notes = [];
   page.doubts = [];
-  page.measureShown = null;
-  scoreTitle.textContent = page.score.title;
-  document.title = `MusicHands — ${page.score.title}`;
+  return true;
+}
+
+// Draws what is on the stand, when it is not what is drawn.
+async function showNotation() {
+  if (page.xml === shown.notation) return;
+  shown.notation = page.xml;
   try {
-    await renderNotation(xml);
+    await renderNotation(page.xml);
   } catch (error) {
     scoreContainer.innerHTML = `<p class="score-fallback">The notation could not be drawn: ${error.message}</p>`;
   }
-  return true;
 }
 
 function showSummary() {
@@ -374,7 +420,7 @@ function moveCursorTo(time, { jump = false } = {}) {
 function goToStep(index) {
   const step = page.steps[Math.max(0, Math.min(page.steps.length - 1, index))];
   if (!step) return;
-  ws.change({ time: step.time, playing: false });
+  ws.change({ ...standTimePatch(ws.state, step.time), playing: false });
 }
 
 // The first step at or after a time, as when a measure is clicked.
@@ -705,7 +751,7 @@ function showScores() {
 // Points the workspace at another of its pieces. Corrections are by moment,
 // so they stay behind with the piece they were made for.
 function chooseScore({ id, title }) {
-  ws.change({ score: { id, title }, time: 0, playing: false, corrections: { fingers: null, hands: null }, passage: null, pose: { left: null, right: null } });
+  ws.change({ score: { id, title }, time: 0, stand: null, playing: false, corrections: { fingers: null, hands: null }, passage: null, pose: { left: null, right: null } });
 }
 
 scoreTitle.addEventListener("click", () => dialogs.song.showModal());
@@ -871,7 +917,7 @@ const transport = new ScoreTransport({
     const now = performance.now();
     if (now - lastSharedTime >= 100 || index === page.steps.length - 1) {
       lastSharedTime = now;
-      ws.change({ time: page.steps[index].time });
+      ws.change(standTimePatch(ws.state, page.steps[index].time));
     }
   },
   schedule: (index, delay) => soundMoment(index, delay),
@@ -1036,12 +1082,13 @@ function passageToPlay() {
   return { ...steps, loop: passage.times === 1 ? null : { from: span.start, to: span.end, times: passage.times } };
 }
 
-// Starts playing from a time in the piece, here, whatever was playing.
+// Starts playing from a time in what is on the stand (or in the sheet the
+// change puts there), here, whatever was playing.
 function playFrom(time, patch = {}) {
   if (!ws?.state) return;
   stopTransport();
   if (!ws.lead) ws.claimLead().catch(() => {});
-  ws.change({ ...patch, time, playing: true });
+  ws.change({ ...patch, ...standTimePatch(ws.state, time, "stand" in patch ? patch.stand : ws.state.stand), playing: true });
 }
 
 // Plays measures `from` to `to` (indexes from 0), `times` times (null: over
@@ -1061,7 +1108,7 @@ function clearPassage() {
 function playMoment(time) {
   if (!ws?.state || transport.playing) return;
   if (stepIndexAt(time) === page.stepIndex) replay("together");
-  else ws.change({ time }); // a jump is shown at once, with sound
+  else ws.change(standTimePatch(ws.state, time)); // a jump is shown at once, with sound
 }
 
 // What an agent can ask the page to do.
@@ -1150,14 +1197,28 @@ async function applyLatest() {
     }
     pendingImportNotes = null;
   }
-  if (!page.score) return;
+  if (!page.piece.score) return;
 
   const correctionsKey = JSON.stringify(state.corrections);
-  const refingered = correctionsKey !== shown.corrections;
+  let refingered = correctionsKey !== shown.corrections;
   if (refingered) {
     refinger(state.corrections);
     shown.corrections = correctionsKey;
   }
+  // What is on the stand: the piece, or a sheet (read again when rewritten).
+  const standKey = state.stand ? JSON.stringify([state.stand, state.sheets[state.stand]]) : "";
+  if (standKey !== shown.stand) {
+    if (shown.stand !== undefined) {
+      stopTransport();
+      player.stop();
+    }
+    shown.stand = standKey;
+    takeStand(state.stand, state.stand ? state.sheets[state.stand] : null);
+    refingered = true;
+  }
+  await showNotation();
+  if (ws !== client) return;
+  if (!page.score) return;
 
   showTempo(state.tempo ?? page.score.tempo ?? DEFAULT_TEMPO);
   if (state.reflexes !== shown.reflexes) {
@@ -1195,7 +1256,7 @@ async function applyLatest() {
   const first = shown.stepIndex === undefined;
   // Server echoes of our own time updates may arrive several notes late. They
   // must not wind the live cursor backwards while the transport owns it.
-  const index = transport.playing && by === client.client ? page.stepIndex : stepIndexAt(state.time);
+  const index = transport.playing && by === client.client ? page.stepIndex : stepIndexAt(standTime(state));
   if (index !== shown.stepIndex || refingered) {
     page.stepIndex = index;
     shown.stepIndex = index;
@@ -1377,6 +1438,7 @@ window.addEventListener("hashchange", () => {
 //     playFrom(time, patch)  plays from there, here, with a change if given
 //     togglePlaying()     what the Play button does
 //     playMoment(time)    shows and sounds one moment of the piece
+//     settled()           a promise for the screen showing the workspace as it now stands
 //   The page
 //     site                what the site can do: { voice, teacher, ears }
 //     speech(text)        that text read aloud, as a Blob; null if the site has no voice
@@ -1396,6 +1458,7 @@ const app = Object.assign(new EventTarget(), {
   playFrom,
   togglePlaying,
   playMoment,
+  settled: () => applying,
   change(patch) {
     if (!ws?.state) return;
     ws.change(patch);

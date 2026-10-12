@@ -4,7 +4,8 @@
 // companion's). The link joins the session (what has been said so far, and
 // from now on what the agent says and asks for) and, on the browser that
 // leads (the one that plays the music), performs what the agent asks of the
-// screen: saying a line, placing a hand, playing a moment or some measures,
+// screen: saying a line, placing a hand, playing a moment or some measures
+// (of the piece, or of a sheet of the agent's own, put on the stand first),
 // a pause. Each is reported done, which is when the agent hears the result.
 // It also carries the learner's words in — typed, a button, the microphone
 // held — cutting short whatever the screen was doing, here and on the
@@ -15,11 +16,10 @@
 // each watcher of every change ("change"), of the server having no session
 // ("absent"), of not being reachable ("unreachable"), and of the session's
 // end ("ended").
-import { lessonRange, stageHands } from "./lesson.js";
+import { stageHands } from "./lesson.js";
 import { Microphone, Narrator } from "./speech.js";
 
 const NO_POSE = { left: null, right: null };
-const HANDS = ["left", "right"];
 const MOMENT_PAUSE = 800; // ms a moment is left to sound before the next thing
 
 export function createAgentLink(app, { root = document } = {}) {
@@ -143,18 +143,18 @@ export function createAgentLink(app, { root = document } = {}) {
         after(asked.pauseMs ?? 0, { placed: true });
         break;
       }
-      case "play_moment":
+      case "play_moment": {
         if (app.state.playing) app.change({ playing: false });
-        app.change({ hands: stageHands(asked.hands), pose: NO_POSE });
-        app.playMoment(asked.time);
-        after(MOMENT_PAUSE, { played: true });
+        // The sheet it is on goes on the stand first, and the moment is sounded once the screen shows it.
+        app.change({ stand: asked.stand ?? null, hands: stageHands(asked.hands), pose: NO_POSE });
+        const pause = setTimeout(() => finish({ played: true }), MOMENT_PAUSE + 400);
+        app.settled().then(() => still() && app.playMoment(asked.time));
+        mine.cancel = () => clearTimeout(pause);
         break;
-      case "play_notes":
-        mine.cancel = playNotes(asked, (result) => finish(result));
-        break;
+      }
       case "play": {
         const passage = { from: asked.from, to: asked.to, times: asked.loop ? null : asked.times, start: asked.start ?? null, end: asked.end ?? null };
-        app.playFrom(lessonRange(passage, app.score.measures).start, { passage, hands: stageHands(asked.hands), tempo: asked.tempo, pose: NO_POSE });
+        app.playFrom(asked.at, { stand: asked.stand ?? null, passage, hands: stageHands(asked.hands), tempo: asked.tempo, pose: NO_POSE });
         mine.cancel = () => app.state?.playing && app.change({ playing: false });
         // Finished by the "played" event below; a loop only by being cut short.
         break;
@@ -163,51 +163,6 @@ export function createAgentLink(app, { root = document } = {}) {
         finish({ error: `the screen cannot ${asked.type}` });
     }
     changed();
-  }
-
-  // Plays freehand: the hands asked for are shown, and each step, at its
-  // time from the start, puts a hand where the step says — the whole hand on
-  // its keys, the struck ones pressed — or lifts it where it sits. Answers a
-  // cancel.
-  function playNotes({ hands: shown, steps }, done) {
-    if (app.state.playing) app.change({ playing: false });
-    app.change({ hands: stageHands(shown) });
-    const sitting = { left: app.state.pose.left?.fingers ?? null, right: app.state.pose.right?.fingers ?? null };
-    let timer = null;
-    let began = performance.now(); // moved on while held, so the run picks up where it was
-    const lift = () => {
-      const pose = {};
-      for (const hand of HANDS) if (sitting[hand]) pose[hand] = { fingers: sitting[hand], press: [], hold: null, step: null };
-      if (Object.keys(pose).length) app.change({ pose });
-    };
-    const next = (index) => {
-      if (paused) {
-        // Held where it is: the run waits, and goes on from this step when taken up again.
-        began += 100;
-        timer = setTimeout(() => next(index), 100);
-        return;
-      }
-      if (index === steps.length) {
-        lift();
-        return done({ played: true });
-      }
-      const step = steps[index];
-      timer = setTimeout(() => {
-        const pose = {};
-        for (const hand of HANDS) {
-          if (!step[hand]) continue;
-          sitting[hand] = step[hand].fingers;
-          pose[hand] = { fingers: step[hand].fingers, press: step[hand].press, hold: step[hand].hold ?? null, step: index };
-        }
-        if (Object.keys(pose).length) app.change({ pose });
-        next(index + 1);
-      }, Math.max(0, began + step.ms - performance.now()));
-    };
-    next(0);
-    return () => {
-      clearTimeout(timer);
-      lift();
-    };
   }
 
   // Cuts the act short here: the voice and the music stop. With `tell`, the

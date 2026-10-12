@@ -57,7 +57,7 @@ function mount(app, host) {
   async function start({ from, to }) {
     const lesson = { mode: "drill", from, to, step: 0, score: app.state.score?.id ?? "" };
     const range = lessonRange(lesson, app.score.measures);
-    app.change({ lesson, passage: { from, to, times: 1, start: null, end: null }, time: range.start, playing: false, tempo: null, pose: NO_POSE, hands: stageHands("both"), camera: { view: { ...OVERHEAD }, autoCut: false } });
+    app.change({ lesson, stand: null, passage: { from, to, times: 1, start: null, end: null }, time: range.start, playing: false, tempo: null, pose: NO_POSE, hands: stageHands("both"), camera: { view: { ...OVERHEAD }, autoCut: false } });
   }
 
   function wait(kind, ms, then) {

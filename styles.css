@@ -1063,6 +1063,15 @@ kbd {
 }
 
 /* The song's name at the bottom of the stage; clicking it changes the song. */
+/* The way back to the piece, above the song's name, while an agent's sheet is on the stand. */
+.song-name.stand-back {
+  bottom: 86px;
+  font-size: 0.8em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
 .song-name {
   position: absolute;
   bottom: 54px;

@@ -75,6 +75,17 @@ function overrideFor(overrides, event) {
   return overrides?.[`${event.measure}:${event.beat}`]?.[event.hand] ?? null;
 }
 
+// Fingers resting on keys at the event's moment, as a sheet says (rests is
+// { "measure:beat": { hand: [{ finger, note }] } }): keys the hand covers
+// without playing them, so the whole hand is placed. A key the event plays
+// is the event's, whatever the rests say.
+function restingFingers(event, rests) {
+  const resting = rests?.[`${event.measure}:${event.beat}`]?.[event.hand] ?? [];
+  const played = new Set(event.notes.map((note) => note.midi));
+  const taken = new Set(event.notes.map((note) => note.finger).filter(Boolean));
+  return resting.map((entry) => ({ note: entry.note, midi: noteToMidi(entry.note), finger: entry.finger })).filter((entry) => !played.has(entry.midi) && !taken.has(entry.finger));
+}
+
 // Fingers the score or the sidecar file already decided, per note of the event.
 function authoredFingers(event, overrides) {
   const override = overrideFor(overrides, event);
@@ -126,6 +137,7 @@ function newPosition(hand, event) {
     keys: new Set(),
     fixed: new Map(),
     events: [],
+    rests: [], // keys the hand covers without playing them, with their fingers
     sources: new Set(),
     startTime: event.time,
     endTime: event.time,
@@ -135,24 +147,27 @@ function newPosition(hand, event) {
   };
 }
 
-export function assignFingering(events, { overrides = {} } = {}) {
+export function assignFingering(events, { overrides = {}, rests = {} } = {}) {
   const positions = { right: [], left: [] };
   const current = { right: null, left: null };
   const placements = new Map(); // event → its position
 
   events.forEach((event) => {
-    const authored = authoredFingers(event, overrides);
+    const resting = restingFingers(event, rests);
+    const authored = [...authoredFingers(event, overrides), ...resting.map((entry) => ({ finger: entry.finger, source: "score" }))];
+    const covered = [...event.notes, ...resting];
     const hand = event.hand;
-    if (!current[hand] || !fitsPosition(current[hand], event.notes, authored)) {
+    if (!current[hand] || !fitsPosition(current[hand], covered, authored)) {
       current[hand] = newPosition(hand, event);
       positions[hand].push(current[hand]);
     }
     const position = current[hand];
-    event.notes.forEach((note, index) => {
+    covered.forEach((note, index) => {
       position.keys.add(note.midi);
       if (authored[index].finger) position.fixed.set(note.midi, authored[index].finger);
       position.sources.add(authored[index].source);
     });
+    position.rests.push(...resting);
     position.events.push(event);
     position.endTime = Math.max(position.endTime, event.time + event.duration);
     position.endMeasure = event.measure;
@@ -165,9 +180,7 @@ export function assignFingering(events, { overrides = {} } = {}) {
       const notes = [...position.keys].map((midi) => ({ midi }));
       const fingered = heuristicFingering(notes, hand, position.fixed);
       position.fingerByMidi = new Map(fingered.map((note) => [note.midi, note.finger]));
-      const fingers = position.events
-        .flatMap((event) => event.notes)
-        .reduce((map, note) => map.set(position.fingerByMidi.get(note.midi), note.note), new Map());
+      const fingers = [...position.events.flatMap((event) => event.notes), ...position.rests].reduce((map, note) => map.set(position.fingerByMidi.get(note.midi), note.note), new Map());
       return {
         hand,
         startTime: position.startTime,

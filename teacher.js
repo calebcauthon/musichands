@@ -36,7 +36,7 @@
 // what is on the screen as they speak.
 import { matchingMoments } from "./corrections.js";
 import { briefText, cleanLesson, defaultLesson, FINGER_PAUSE, FINGER_SHORT, handMoments, lessonRange, momentName, NO_LESSON, OVERHEAD, slowTempo, stageHands } from "./lesson.js";
-import { freehandSteps, MOST_NOTES as MOST_FREEHAND_NOTES } from "./freehand.js";
+import { MOST_NOTES as MOST_SHEET_NOTES, writeSheet } from "./freehand.js";
 import { findStyle, STYLES } from "./teaching-styles.js";
 
 export const ACT_WAIT = 10 * 60 * 1000; // ms an act waits for a browser before it is given up
@@ -56,7 +56,7 @@ const LOOK_KINDS = { piano: ["ebony", "white", "rosewood", "crimson"], build: ["
 // ---------------------------------------------------------------------------
 // What the agent is told
 
-const WHO = `You are beside one adult at a piano. They are working on a piece with a screen that shows a pair of hands playing it, with the notation beside it. The screen is theirs: they move about the piece, play it, step through it, choose a hand, change a fingering, as they please. You are company who knows the music and can work the screen: you answer what they ask and do what they ask — go to a measure, play something, slower, one hand, show a fingering, change it, say what the hands do here, look ahead — and otherwise you keep quiet. You know music in general as well as this piece — keys, scales, chords, intervals, how a passage is built — and answer such questions plainly; when it helps to hear or see what you mean, the hands play it with play_notes, in the piece or not. You do not teach unless they ask you to; when they do, a LESSON begins (see below, if one is on) and you lead it. They cannot read while they play: everything reaches them by ear, through a text-to-speech voice that reads what you say.
+const WHO = `You are beside one adult at a piano. They are working on a piece with a screen that shows a pair of hands playing it, with the notation beside it. The screen is theirs: they move about the piece, play it, step through it, choose a hand, change a fingering, as they please. You are company who knows the music and can work the screen: you answer what they ask and do what they ask — go to a measure, play something, slower, one hand, show a fingering, change it, say what the hands do here, look ahead — and otherwise you keep quiet. You know music in general as well as this piece — keys, scales, chords, intervals, how a passage is built — and answer such questions plainly; when it helps to hear or see what you mean, write a sheet of your own and play it, in the piece or not. You do not teach unless they ask you to; when they do, a LESSON begins (see below, if one is on) and you lead it. They cannot read while they play: everything reaches them by ear, through a text-to-speech voice that reads what you say.
 
 THE MANNER
 Plain, warm, precise, unhurried. Never childish, never gushing. Talks like someone sitting beside them, not like a manual. Says what was asked and no more; a word or two is often enough. Does not announce what it is about to do; does it, and says a word. No preamble, no recap, no filler praise. Short sentences, rarely more than twelve words. When a question is answered by doing something on the screen, do that.
@@ -80,14 +80,14 @@ Everything you do on the screen is a tool call. Every word you write outside a t
 - see: what is on the screen now, in full: where they are, what each hand has there, whether it is playing, the tempo, the hands, the camera, the passage Play keeps to. Their messages carry the short form of this, so you rarely need it.
 - screen: change the screen: go to a measure or a moment, set the tempo, choose the hands, finger numbers, sound, the camera, the passage Play keeps to, stop the music, the look of the stage. Send only what should change. This is how to do what they ask when it is not playing something.
 - play: the hands on the screen play some measures, or the stretch from one moment up to another (two or three notes, say), at a tempo, a number of times, or looped. It returns when the playing has played out — or sooner, if they say something, with their words. A loop returns only when they do. They play along with it, or watch, as you have told them.
-- play_notes: the hands on the screen play anything you write, freehand, at a tempo: a scale, a chord, an arpeggio, a run, a bit of the piece changed to show a point. It is sheet music of your own, not shown: each hand gets its notes in order (the keys struck, a finger each, and how many beats), and a position — where every finger rests — when the hand should hold still, as a pianist's does; without one, the hand sits over the keys it plays. Only the hands you name are seen and heard, so one hand alone is one hand alone. For the piece as written, use play or play_moment instead.
 - play_moment: the hands on the screen play one moment — one note or chord and nothing after it — as you name it.
+- write_sheet: sheet music of your own, for anything not in the piece: a scale, a chord, an arpeggio, a tune, a bit of the piece changed to show a point. Each hand gets its notes in order (the keys struck, a finger each, and how many beats), and a position — where every finger rests — when the hand should hold still, as a pianist's does; without one, the hand sits over the keys it plays. A sheet is kept under a title and an id, and you may write several; each keeps its own place. THE STAND: the notation and the hands show what is on the stand — the piece, or one of your sheets. screen (sheet) puts one there, and it is drawn and played like the piece: play, play_moment and look take a sheet by its id, or "piece", and otherwise go by what is on the stand. Measures and moments are the sheet's own, from 1:1. A sheet is seen and heard with the hands you name, so a right-hand sheet with hands "right" is the right hand alone.
 - place: put a hand on the screen where you say, finger by finger as you name them, so they can copy it. The pressed keys sound once as the hand lands; it is a picture of a hand, not a performance. After naming a finger, pause a moment for theirs to get there. fingers: [] gives the hand back to the score.
-- To be HEARD, play: play_moment for one note or chord of the piece, play for a stretch of it, play_notes for anything not in it. "Let me show you" means one of these, not place.
+- To be HEARD, play: play_moment for one note or chord, play for a stretch — of the piece, or of a sheet of yours; for anything not in the piece, write a sheet and play it. "Let me show you" means one of these, not place.
 - pause: a silence of a few seconds, for them to do something.
 - listen: wait for them to say something. After a plain reply you wait anyway. Do not wait after every sentence; wait when there is something for them to do.
 - look: the brief for some measures: where each hand sits and every moment it plays, with the fingering as it stands. A few measures at a time.
-- change_fingering, move_note: change the fingering the hands on the screen use, at one moment or everywhere that hand plays the same notes, or give a note to the other hand. Do it when they ask for another fingering, or in a lesson when you judge the one given awkward. The screen and the brief change with it.
+- change_fingering, move_note: change the fingering the hands on the screen use, at one moment or everywhere that hand plays the same notes, or give a note to the other hand. Do it when they ask for another fingering, or in a lesson when you judge the one given awkward. The screen and the brief change with it. These are for the piece; a sheet of yours is rewritten with write_sheet.
 - remember: rewrite one of your two sets of notes (see WHAT YOU REMEMBER).
 - teach (when no lesson is on): they ask to be taught some measures, or for a lesson: begin one, with the measures, a way of teaching, and what they asked for in their words.
 - focus, done (in a lesson): tell the screen which measures the lesson is on now; end the lesson, with a last word.
@@ -141,16 +141,17 @@ const optional = (properties) => schema(properties, []);
 const tool = (name, description, parameters) => ({ type: "function", function: { name, description, parameters } });
 const measure = (what) => ({ type: "string", description: `${what}, by the score's measure number as the learner sees it.` });
 const hands = { type: "string", enum: HANDS, description: "Which hands are shown and heard." };
+const sheetRef = { type: "string", description: 'One of your sheets, by id, or "piece" for the piece. Left out or "", whatever is on the stand.' };
 const fingerOnKey = schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } });
 const position = (when) => ({ type: "array", items: fingerOnKey, description: `Where the whole hand sits ${when}: the key each finger rests on, pressed or not, so the hand holds still like a pianist's. Name every finger whose place matters; a finger left out goes where the notes it plays put it.` });
-// One hand's part of play_notes: its notes in order, and where it sits.
+// One hand's part of a sheet: its notes in order, and where it sits.
 const handPart = schema(
   {
     position: position("from the first note on, until a note gives a new one"),
     notes: {
       type: "array",
       minItems: 1,
-      maxItems: MOST_FREEHAND_NOTES,
+      maxItems: MOST_SHEET_NOTES,
       items: schema(
         {
           keys: { type: "array", minItems: 1, items: fingerOnKey, description: "The keys struck, a finger each: one for a note, several for a chord." },
@@ -171,7 +172,7 @@ export const TOOLS = [
   tool("pause", "A silence, for the learner to do something.", schema({ seconds: { type: "number", minimum: 0.5, maximum: MOST_PAUSE } })),
   tool(
     "place",
-    "Put a hand on the screen where you say: which finger on which key, and which keys are pressed. Shown while nothing is playing; the pressed keys sound once as the hand lands, no more. To let them hear a note or chord of the piece, use play_moment; to hear a stretch of it, play; to hear notes of your own, play_notes. fingers: [] gives the hand back to the score.",
+    "Put a hand on the screen where you say: which finger on which key, and which keys are pressed. Shown while nothing is playing; the pressed keys sound once as the hand lands, no more. To let them hear a note or chord of the piece, use play_moment; to hear a stretch of it, play; to hear notes of your own, write a sheet and play it. fingers: [] gives the hand back to the score.",
     schema({
       hand: { type: "string", enum: ["right", "left"] },
       fingers: { type: "array", items: schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } }) },
@@ -179,24 +180,28 @@ export const TOOLS = [
     }),
   ),
   tool(
-    "play_notes",
-    "The hands on the screen play notes you write yourself, in the piece or not: a scale, a chord, an arpeggio, a tune, a bit of the piece changed to show a point. Sheet music of your own, not shown: for each hand that plays, its notes in order, and where the hand sits. Returns when played out, or when the learner says something. The hands stay where they end; place with fingers [] gives a hand back to the score.",
+    "write_sheet",
+    "Write sheet music of your own, for anything not in the piece: a scale, a chord, an arpeggio, a tune, a bit of the piece changed to show a point. For each hand that plays, its notes in order, and where the hand sits. The sheet is kept under a title and an id (twelve at most; the oldest goes), each with its own place; put it on the stand with show here or screen, and play it with play. Answers the id and the brief of what was written, as the hands will play it.",
     schema(
       {
-        tempo: { type: "integer", minimum: 30, maximum: 240, description: "Beats a minute." },
-        hands,
+        title: { type: "string", description: "What to call it, as they would hear it: \"The A minor scale\", \"Measure 3 with the other fingering\"." },
+        tempo: { type: "integer", minimum: 30, maximum: 240, description: "The sheet's own tempo, beats a minute; play may still choose another." },
+        beats_per_measure: { type: "integer", enum: [2, 3, 4, 6], description: "How the beats fall into measures; 4 if left out." },
         right: handPart,
         left: handPart,
+        show: { type: "boolean", description: "true puts the sheet on the stand now, at its start." },
+        replace: { type: "string", description: "The id of a sheet of yours to rewrite in place; a new sheet otherwise." },
       },
-      ["tempo", "hands"],
+      ["title"],
     ),
   ),
-  tool("play_moment", "The hands on the screen play one moment of the piece: just that note or chord, nothing after it.", schema({ moment: { type: "string", description: "measure:beat" }, hands })),
+  tool("play_moment", "The hands on the screen play one moment of the piece, or of a sheet of yours: just that note or chord, nothing after it.", schema({ moment: { type: "string", description: "measure:beat" }, hands, sheet: sheetRef }, ["moment", "hands"])),
   tool(
     "play",
-    "The hands on the screen play the measures, or the stretch between two moments, at a tempo, so many times or looped. Returns when played out, or when the learner says something. For one note or chord use play_moment instead.",
+    "The hands on the screen play the measures, or the stretch between two moments, of the piece or of a sheet of yours, at a tempo, so many times or looped. Returns when played out, or when the learner says something. For one note or chord use play_moment instead.",
     schema(
       {
+        sheet: sheetRef,
         from_measure: measure("The first measure to play"),
         to_measure: measure("The last measure to play"),
         from_moment: { type: "string", description: "Start at this moment (measure:beat) instead of the first measure's start. \"\" to start at the measure." },
@@ -210,7 +215,7 @@ export const TOOLS = [
     ),
   ),
   tool("listen", "Wait for the learner to say something (or, in a lesson, press Got it).", schema({})),
-  tool("look", "The brief for some measures: where each hand sits and every moment it plays, with the fingering as it stands.", schema({ from_measure: measure("The first measure"), to_measure: measure("The last measure") })),
+  tool("look", "The brief for some measures, of the piece or of a sheet of yours: where each hand sits and every moment it plays, with the fingering as it stands.", schema({ sheet: sheetRef, from_measure: measure("The first measure"), to_measure: measure("The last measure") }, ["from_measure", "to_measure"])),
   tool(
     "change_fingering",
     "Change which finger plays a note at a moment, on the screen and in the brief. With everywhere, at every moment where that hand plays the same notes.",
@@ -222,6 +227,7 @@ export const TOOLS = [
     "screen",
     "Change the screen. Send only the fields that should change; the rest stay as they are. Answers what is on the screen afterwards.",
     optional({
+      sheet: { type: "string", description: 'Put this on the stand: one of your sheets by id, or "piece" for the piece. measure and moment then go by it.' },
       measure: measure("Go to the start of this measure"),
       moment: { type: "string", description: "Go to this moment (measure:beat) instead." },
       tempo: { type: "integer", minimum: 0, maximum: 240, description: "Beats a minute when playing; 0 for the score's own tempo." },
@@ -271,7 +277,7 @@ export const LESSON_TOOLS = [
   tool("done", "End the lesson.", schema({ closing: { type: "string", description: "A last word, spoken." } })),
 ];
 
-export const ACTS = ["say", "pause", "place", "play_moment", "play", "play_notes"]; // the tools the screen performs
+export const ACTS = ["say", "pause", "place", "play_moment", "play"]; // the tools the screen performs
 
 // ---------------------------------------------------------------------------
 
@@ -407,7 +413,7 @@ export class Teacher {
     session.teaching = { style, brief: briefText(music, range) };
     await this.reprompt(session);
     // The screen is set for the lesson: the passage, seen from straight above.
-    await this.lay(session, { lesson, passage: { from: lesson.from, to: lesson.to, times: 1, start: null, end: null }, time: range.start, playing: false, tempo: null, pose: NO_POSE, hands: stageHands("both"), camera: { view: { ...OVERHEAD }, autoCut: false } });
+    await this.lay(session, { lesson, stand: null, passage: { from: lesson.from, to: lesson.to, times: 1, start: null, end: null }, time: range.start, playing: false, tempo: null, pose: NO_POSE, hands: stageHands("both"), camera: { view: { ...OVERHEAD }, autoCut: false } });
     if (words) this.tell(session, "said", { who: "learner", text: words });
     this.tell(session, "lesson", { on: true, lesson });
     this.deliver(session, openingMessage({ style, range, said: words }));
@@ -558,7 +564,7 @@ export class Teacher {
     if (session.inbox.length) return this.heard(session, { interrupted: true, reason: "the learner spoke before this began; answer them", learner_said: session.inbox.shift() });
     const id = String(++session.serial);
     const sent = { id, ...act };
-    this.tell(session, "status", { status: act.type === "say" ? "speaking" : ["play", "play_moment", "play_notes"].includes(act.type) ? "playing" : "waiting", act: sent });
+    this.tell(session, "status", { status: act.type === "say" ? "speaking" : ["play", "play_moment"].includes(act.type) ? "playing" : "waiting", act: sent });
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (!session.pending.has(id)) return;
@@ -748,19 +754,32 @@ export class Teacher {
         return this.perform(session, { type: "place", hand: args.hand, fingers, press, pauseMs: fingers.length ? FINGER_PAUSE : 0 });
       }
       case "play_moment": {
-        const music = await this.music(record);
+        const { music, stand, error } = await this.musicOf(record, args.sheet);
+        if (error) return { error };
         const which = HANDS.includes(args.hands) ? args.hands : "both";
         const event = this.findMoment(music, args.moment, which);
-        if (!event) return { error: `No moment ${args.moment} is played by ${which === "both" ? "either hand" : `the ${which} hand`}` };
-        return this.perform(session, { type: "play_moment", time: event.time, hands: which, moment: momentName(event) });
+        if (!event) return { error: `No moment ${args.moment} is played by ${which === "both" ? "either hand" : `the ${which} hand`}${stand ? ` in sheet ${stand}` : ""}` };
+        return this.perform(session, { type: "play_moment", stand, time: event.time, hands: which, moment: momentName(event) });
       }
-      case "play_notes": {
-        const run = freehandSteps(args);
-        if (run.error) return run;
-        return this.perform(session, { type: "play_notes", ...run });
+      case "write_sheet": {
+        const sheet = writeSheet(args);
+        if (sheet.error) return sheet;
+        const known = record.state.sheets;
+        let id = typeof args.replace === "string" && known[args.replace] ? args.replace : null;
+        if (!id) {
+          let n = Object.keys(known).length + 1;
+          while (known[`s${n}`]) n += 1;
+          id = `s${n}`;
+        }
+        const patch = { sheets: { [id]: { title: sheet.title, xml: sheet.xml, rests: sheet.rests, time: 0 } } };
+        if (args.show === true) Object.assign(patch, { stand: id, passage: null, playing: false, pose: NO_POSE });
+        await this.lay(session, patch);
+        const music = await this.music(record, id);
+        return { sheet: id, title: sheet.title, measures: sheet.measures, on_stand: record.state.stand === id, brief: briefText(music, lessonRange({ from: 0, to: sheet.measures - 1 }, music.score.measures)) };
       }
       case "play": {
-        const music = await this.music(record);
+        const { music, stand, error } = await this.musicOf(record, args.sheet);
+        if (error) return { error };
         const span = this.findMeasures(music, args.from_measure, args.to_measure);
         if (span.error) return span;
         const which = HANDS.includes(args.hands) ? args.hands : "both";
@@ -785,19 +804,21 @@ export class Teacher {
         const loop = args.loop === true;
         const tempo = Math.min(240, Math.max(30, Math.round(Number(args.tempo) || slowTempo(music.tempo))));
         const times = loop ? null : Math.min(10, Math.max(1, Math.round(Number(args.times) || 1)));
-        return this.perform(session, { type: "play", from: span.from, to: span.to, start, end, hands: which, tempo, times, loop });
+        return this.perform(session, { type: "play", stand, at: start ?? range.start, from: span.from, to: span.to, start, end, hands: which, tempo, times, loop });
       }
       case "listen": {
         const words = await this.hear(session);
         return words === null ? { skipped: true, reason: "the conversation ended" } : this.heard(session, { said: words });
       }
       case "look": {
-        const music = await this.music(record);
+        const { music, error } = await this.musicOf(record, args.sheet);
+        if (error) return { error };
         const span = this.findMeasures(music, args.from_measure, args.to_measure);
         if (span.error) return span;
         return { brief: briefText(music, lessonRange(span, music.score.measures)) };
       }
       case "change_fingering": {
+        if (record.state.stand) return { error: `Sheet ${record.state.stand} is on the stand; corrections are for the piece. Rewrite the sheet with write_sheet (replace), or put the piece back with screen` };
         const music = await this.music(record);
         if (!["right", "left"].includes(args.hand)) return { error: "hand must be right or left" };
         const finger = Number(args.finger);
@@ -813,6 +834,7 @@ export class Teacher {
         return this.fingeredNow(record, args.hand, momentName(event), { changed: moments.length });
       }
       case "move_note": {
+        if (record.state.stand) return { error: `Sheet ${record.state.stand} is on the stand; corrections are for the piece. Rewrite the sheet with write_sheet (replace), or put the piece back with screen` };
         const music = await this.music(record);
         if (!["right", "left"].includes(args.hand)) return { error: "hand must be right or left" };
         const note = String(args.note ?? "");
@@ -870,17 +892,21 @@ export class Teacher {
   // anything wrong is answered instead, and nothing changes.
   async changeScreen(session, args) {
     const { record } = session;
-    const music = await this.music(record);
+    const { music, stand, error } = await this.musicOf(record, args.sheet);
+    if (error) return { error };
     const patch = {};
+    if (args.sheet !== undefined && args.sheet !== "" && stand !== record.state.stand) Object.assign(patch, { stand, passage: null, playing: false });
+    let time;
     if (args.moment !== undefined && args.moment !== "") {
       const event = this.findMoment(music, args.moment, "both");
-      if (!event) return { error: `No moment ${args.moment} in the piece` };
-      patch.time = event.time;
+      if (!event) return { error: `No moment ${args.moment} in ${stand ? `sheet ${stand}` : "the piece"}` };
+      time = event.time;
     } else if (args.measure !== undefined && args.measure !== "") {
       const span = this.findMeasures(music, args.measure, args.measure);
       if (span.error) return span;
-      patch.time = music.score.measures[span.from].start;
+      time = music.score.measures[span.from].start;
     }
+    if (time !== undefined) Object.assign(patch, stand ? { sheets: { [stand]: { time } } } : { time });
     if (args.tempo !== undefined) patch.tempo = Number(args.tempo) ? Math.min(240, Math.max(30, Math.round(Number(args.tempo)))) : null;
     if (HANDS.includes(args.hands)) patch.hands = stageHands(args.hands);
     for (const key of ["numbers", "sound", "playing"]) if (typeof args[key] === "boolean") patch[key] = args[key];
@@ -904,9 +930,22 @@ export class Teacher {
     }
     if (Number.isFinite(args.reflexes)) patch.reflexes = args.reflexes;
     if (!Object.keys(patch).length) return { error: "Nothing to change: send the fields that should change" };
-    if (patch.time !== undefined || patch.hands) patch.pose = NO_POSE; // a posed hand goes back to the score when the piece moves on
+    if (time !== undefined || patch.hands || "stand" in patch) patch.pose = NO_POSE; // a posed hand goes back to the score when the piece moves on
     await this.lay(session, patch);
     return { changed: Object.keys(patch).filter((key) => key !== "pose"), ...(await this.seen(record)) };
+  }
+
+  // The music a tool means: a sheet of the agent's by id, "piece" for the
+  // piece, or, left out, whatever is on the stand. Answers { music, stand }
+  // with the stand it should be shown on, or { error }.
+  async musicOf(record, ref) {
+    const wanted = String(ref ?? "").trim();
+    const stand = wanted === "" ? record.state.stand : wanted === "piece" ? null : wanted;
+    if (stand && !record.state.sheets[stand]) {
+      const ids = Object.keys(record.state.sheets);
+      return { error: `No sheet "${wanted}". ${ids.length ? `Your sheets: ${ids.map((id) => `${id} "${record.state.sheets[id].title}"`).join(", ")}` : "You have written none yet"}; "piece" is the piece` };
+    }
+    return { music: await this.music(record, stand), stand };
   }
 
   // What is on the screen, as projectScreen has it (server.js hands it in).
@@ -922,7 +961,7 @@ export class Teacher {
     const { state } = record;
     const hand = (which) => (shot.hands[which].notes.length ? shot.hands[which].notes.map((note) => `${FINGER_SHORT[note.finger] ?? "?"} on ${note.note}${note.held ? " (held)" : ""}`).join(", ") : "nothing");
     const shown = state.hands.left.show && state.hands.right.show ? "both hands" : state.hands.left.show ? "left hand only" : state.hands.right.show ? "right hand only" : "no hands shown";
-    const parts = [`measure ${shot.measure}, beat ${shot.beat}`, `right: ${hand("right")}`, `left: ${hand("left")}`, state.playing ? "playing" : "not playing", shown, `tempo ${state.tempo ?? music.tempo}`];
+    const parts = [...(state.stand ? [`on the stand: your sheet ${state.stand} "${state.sheets[state.stand]?.title}"`] : []), `measure ${shot.measure}, beat ${shot.beat}`, `right: ${hand("right")}`, `left: ${hand("left")}`, state.playing ? "playing" : "not playing", shown, `tempo ${state.tempo ?? music.tempo}`];
     if (state.passage) {
       const range = lessonRange(state.passage, music.score.measures);
       parts.push(`Play keeps to measures ${range.from} to ${range.to}${state.passage.times === null ? ", looped" : state.passage.times > 1 ? `, ${state.passage.times} times` : ""}`);
@@ -943,6 +982,7 @@ export class Teacher {
       sound: state.sound ? "sound on" : "sound off",
       look: Object.entries(state.look).map(([kind, name]) => `${kind} ${name}`).join(", "),
       corrections: `${fingers} finger ${fingers === 1 ? "correction" : "corrections"}, ${Object.keys(state.corrections.hands).length} notes moved to the other hand`,
+      sheets: Object.keys(state.sheets).length ? Object.entries(state.sheets).map(([id, sheet]) => `${id} "${sheet.title}"`).join(", ") : "none written yet",
     };
   }
 

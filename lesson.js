@@ -48,7 +48,7 @@ export function cleanLesson(value) {
 }
 
 // The workspace as it is with no lesson on: the whole piece, both hands, at its own tempo.
-export const NO_LESSON = { lesson: null, passage: null, playing: false, tempo: null, hands: { left: { show: true, sound: true }, right: { show: true, sound: true } }, pose: { left: null, right: null } };
+export const NO_LESSON = { lesson: null, passage: null, playing: false, tempo: null, hands: { left: { show: true, sound: true }, right: { show: true, sound: true } }, pose: { left: null, right: null }, stand: null };
 
 // Where to play from when going back a few seconds within a passage: never before its start.
 export function backTime(time, seconds, tempo, start) {
