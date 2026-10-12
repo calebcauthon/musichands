@@ -36,6 +36,7 @@
 // what is on the screen as they speak.
 import { matchingMoments } from "./corrections.js";
 import { briefText, cleanLesson, defaultLesson, FINGER_PAUSE, FINGER_SHORT, handMoments, lessonRange, momentName, NO_LESSON, OVERHEAD, slowTempo, stageHands } from "./lesson.js";
+import { freehandSteps, MOST_NOTES as MOST_FREEHAND_NOTES } from "./freehand.js";
 import { findStyle, STYLES } from "./teaching-styles.js";
 
 export const ACT_WAIT = 10 * 60 * 1000; // ms an act waits for a browser before it is given up
@@ -45,7 +46,6 @@ const QUIET_TURNS = 30; // turns without a word from the learner before the agen
 const MOST_MESSAGES = 200; // a conversation longer than this loses its oldest turns
 const KEPT_MESSAGES = 140; // down to about this many
 const MOST_PAUSE = 10; // seconds
-const MOST_STEPS = 64; // steps in one play_notes
 const NOTE = /^[A-G][#b]?-?\d$/;
 const HANDS = ["right", "left", "both"];
 const ABOUT = ["person", "workspace"];
@@ -80,7 +80,7 @@ Everything you do on the screen is a tool call. Every word you write outside a t
 - see: what is on the screen now, in full: where they are, what each hand has there, whether it is playing, the tempo, the hands, the camera, the passage Play keeps to. Their messages carry the short form of this, so you rarely need it.
 - screen: change the screen: go to a measure or a moment, set the tempo, choose the hands, finger numbers, sound, the camera, the passage Play keeps to, stop the music, the look of the stage. Send only what should change. This is how to do what they ask when it is not playing something.
 - play: the hands on the screen play some measures, or the stretch from one moment up to another (two or three notes, say), at a tempo, a number of times, or looped. It returns when the playing has played out — or sooner, if they say something, with their words. A loop returns only when they do. They play along with it, or watch, as you have told them.
-- play_notes: the hands on the screen play anything you choose, freehand, at a tempo: a scale, a chord, an arpeggio, a run, a bit of the piece changed to show a point. You give each step: which finger presses which key in each hand, and for how many beats. For the piece as written, use play or play_moment instead.
+- play_notes: the hands on the screen play anything you write, freehand, at a tempo: a scale, a chord, an arpeggio, a run, a bit of the piece changed to show a point. It is sheet music of your own, not shown: each hand gets its notes in order (the keys struck, a finger each, and how many beats), and a position — where every finger rests — when the hand should hold still, as a pianist's does; without one, the hand sits over the keys it plays. Only the hands you name are seen and heard, so one hand alone is one hand alone. For the piece as written, use play or play_moment instead.
 - play_moment: the hands on the screen play one moment — one note or chord and nothing after it — as you name it.
 - place: put a hand on the screen where you say, finger by finger as you name them, so they can copy it. The pressed keys sound once as the hand lands; it is a picture of a hand, not a performance. After naming a finger, pause a moment for theirs to get there. fingers: [] gives the hand back to the score.
 - To be HEARD, play: play_moment for one note or chord of the piece, play for a stretch of it, play_notes for anything not in it. "Let me show you" means one of these, not place.
@@ -141,7 +141,29 @@ const optional = (properties) => schema(properties, []);
 const tool = (name, description, parameters) => ({ type: "function", function: { name, description, parameters } });
 const measure = (what) => ({ type: "string", description: `${what}, by the score's measure number as the learner sees it.` });
 const hands = { type: "string", enum: HANDS, description: "Which hands are shown and heard." };
-const pressing = { type: "array", items: schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } }), description: "The keys this hand presses in the step, a finger each." };
+const fingerOnKey = schema({ finger: { type: "integer", minimum: 1, maximum: 5 }, note: { type: "string", description: "Letter, accidental and octave, e.g. C4, F#3, Bb2." } });
+const position = (when) => ({ type: "array", items: fingerOnKey, description: `Where the whole hand sits ${when}: the key each finger rests on, pressed or not, so the hand holds still like a pianist's. Name every finger whose place matters; a finger left out goes where the notes it plays put it.` });
+// One hand's part of play_notes: its notes in order, and where it sits.
+const handPart = schema(
+  {
+    position: position("from the first note on, until a note gives a new one"),
+    notes: {
+      type: "array",
+      minItems: 1,
+      maxItems: MOST_FREEHAND_NOTES,
+      items: schema(
+        {
+          keys: { type: "array", minItems: 1, items: fingerOnKey, description: "The keys struck, a finger each: one for a note, several for a chord." },
+          beats: { type: "number", minimum: 0.25, maximum: 8, description: "How long it lasts, in beats." },
+          at: { type: "number", minimum: 1, description: "The beat it begins on, counted from one through the run. Left out, it begins as the note before ends; a later beat leaves a rest." },
+          position: position("from this note on"),
+        },
+        ["keys", "beats"],
+      ),
+    },
+  },
+  ["notes"],
+);
 
 // The tools the agent always has.
 export const TOOLS = [
@@ -158,16 +180,16 @@ export const TOOLS = [
   ),
   tool(
     "play_notes",
-    "The hands on the screen play notes you choose, freehand, in the piece or not: a scale, a chord, an arpeggio, a tune. Steps, in order: in each, the keys each hand presses (finger and note; [] for a hand that presses nothing then and stays where it is), held for so many beats. Returns when played out, or when the learner says something. The hands stay where they end; place with fingers [] gives a hand back to the score.",
-    schema({
-      tempo: { type: "integer", minimum: 30, maximum: 240, description: "Beats a minute." },
-      steps: {
-        type: "array",
-        minItems: 1,
-        maxItems: MOST_STEPS,
-        items: schema({ right: pressing, left: pressing, beats: { type: "number", minimum: 0.25, maximum: 8, description: "How long the step lasts, in beats." } }),
+    "The hands on the screen play notes you write yourself, in the piece or not: a scale, a chord, an arpeggio, a tune, a bit of the piece changed to show a point. Sheet music of your own, not shown: for each hand that plays, its notes in order, and where the hand sits. Returns when played out, or when the learner says something. The hands stay where they end; place with fingers [] gives a hand back to the score.",
+    schema(
+      {
+        tempo: { type: "integer", minimum: 30, maximum: 240, description: "Beats a minute." },
+        hands,
+        right: handPart,
+        left: handPart,
       },
-    }),
+      ["tempo", "hands"],
+    ),
   ),
   tool("play_moment", "The hands on the screen play one moment of the piece: just that note or chord, nothing after it.", schema({ moment: { type: "string", description: "measure:beat" }, hands })),
   tool(
@@ -733,24 +755,9 @@ export class Teacher {
         return this.perform(session, { type: "play_moment", time: event.time, hands: which, moment: momentName(event) });
       }
       case "play_notes": {
-        const tempo = Math.min(240, Math.max(30, Math.round(Number(args.tempo) || 0))) || 60;
-        const given = Array.isArray(args.steps) ? args.steps.slice(0, MOST_STEPS) : [];
-        if (!given.length) return { error: "No steps to play" };
-        const steps = [];
-        for (const [index, step] of given.entries()) {
-          const pressed = {};
-          for (const hand of ["right", "left"]) {
-            const keys = Array.isArray(step?.[hand]) ? step[hand] : [];
-            const fingers = keys.map((entry) => ({ finger: Number(entry?.finger), note: String(entry?.note ?? "") }));
-            const wrong = fingers.find((entry) => ![1, 2, 3, 4, 5].includes(entry.finger) || !NOTE.test(entry.note));
-            if (wrong) return { error: `Step ${index + 1}, ${hand} hand: finger ${wrong.finger} on ${wrong.note || "nothing"} is not a finger on a key (fingers 1 to 5, notes like C4, F#3, Bb2)` };
-            if (new Set(fingers.map((entry) => entry.finger)).size < fingers.length) return { error: `Step ${index + 1}, ${hand} hand: one finger on two keys` };
-            pressed[hand] = fingers;
-          }
-          const beats = Math.min(8, Math.max(0.25, Number(step?.beats) || 1));
-          steps.push({ ...pressed, ms: Math.round((beats * 60000) / tempo) });
-        }
-        return this.perform(session, { type: "play_notes", tempo, steps });
+        const run = freehandSteps(args);
+        if (run.error) return run;
+        return this.perform(session, { type: "play_notes", ...run });
       }
       case "play": {
         const music = await this.music(record);

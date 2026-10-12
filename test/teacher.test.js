@@ -203,15 +203,22 @@ test("a lesson: the teacher's acts reach the screen, their results reach the mod
       assert.match(JSON.parse(model.calls[8].messages.at(-2).content).error, /No moment 9:9/);
       assert.match(last(model).error, /No such tool now: teach/);
 
-      // Freehand: the steps reach the screen with their length in ms at the tempo; a finger that is not one is an error.
-      const steps = [{ right: [{ finger: 1, note: "A4" }], left: [], beats: 1 }, { right: [{ finger: 2, note: "B4" }], left: [{ finger: 5, note: "A2" }], beats: 0.5 }];
-      model.answer({ content: "", tool_calls: [call("c8c", "play_notes", { tempo: 120, steps }), call("c8d", "play_notes", { tempo: 60, steps: [{ right: [{ finger: 6, note: "A4" }], left: [], beats: 1 }] })] });
+      // Freehand: the passage reaches the screen as whole-hand poses in ms at the tempo, with the hands to show; a hand it cannot do is an error.
+      const notes = [{ keys: [{ finger: 1, note: "A4" }], beats: 1 }, { keys: [{ finger: 2, note: "B4" }], beats: 0.5 }];
+      model.answer({ content: "", tool_calls: [call("c8c", "play_notes", { tempo: 120, hands: "right", right: { notes } }), call("c8d", "play_notes", { tempo: 60, hands: "right", right: { notes: [{ keys: [{ finger: 6, note: "A4" }], beats: 1 }] } })] });
       const freehand = await events.nextOf("act");
-      assert.deepEqual(freehand, { id: freehand.id, type: "play_notes", tempo: 120, steps: [{ right: [{ finger: 1, note: "A4" }], left: [], ms: 500 }, { right: [{ finger: 2, note: "B4" }], left: [{ finger: 5, note: "A2" }], ms: 250 }] });
+      const whole = [{ finger: 1, note: "A4" }, { finger: 2, note: "B4" }];
+      assert.deepEqual(freehand, {
+        id: freehand.id,
+        type: "play_notes",
+        tempo: 120,
+        hands: "right",
+        steps: [{ ms: 0, right: { fingers: whole, press: ["A4"], hold: 500 } }, { ms: 500, right: { fingers: whole, press: ["B4"], hold: 250 } }, { ms: 750, right: { fingers: whole, press: [] } }],
+      });
       await api("/teacher/done", "POST", { id: freehand.id, result: { played: true } });
       await events.nextOf("status");
       assert.deepEqual(last(model, 2), { played: true });
-      assert.match(last(model).error, /Step 1, right hand: finger 6 on A4/);
+      assert.match(last(model).error, /right hand, note 1: finger 6 on A4/);
 
       // Done: the last word is spoken, the piece is put back, and the agent is simply there again.
       model.answer({ content: "", tool_calls: [call("c9", "done", { closing: "That's it for today." })] });

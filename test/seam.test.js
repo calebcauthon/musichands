@@ -17,7 +17,7 @@ test("learning and its ways use only their own files, the passage arithmetic and
   assert.deepEqual(imports(await source("lesson.js")).sort(), ["./passage.js", "./teaching-styles.js"]);
   assert.deepEqual(imports(await source("teaching-styles.js")), []);
   assert.deepEqual(imports(await source("speech.js")), []);
-  assert.deepEqual(imports(await source("teacher.js")).sort(), ["./corrections.js", "./lesson.js", "./teaching-styles.js"], "the teacher shares the lesson's files with the page, and knows corrections");
+  assert.deepEqual(imports(await source("teacher.js")).sort(), ["./corrections.js", "./freehand.js", "./lesson.js", "./teaching-styles.js"], "the teacher shares the lesson's files with the page, knows corrections, and writes its freehand passages");
   for (const name of ["learning.js", "learning-teacher.js", "learning-drill.js", "companion.js", "agent-link.js"]) {
     const code = (await source(name)).replace(/\/\/.*$/gm, ""); // the code, without its comments
     assert.doesNotMatch(code, /\bws\b|\bpage\.|transport|handsView|musichands/, `${name}: nothing of the page's insides`);
