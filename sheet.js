@@ -1205,15 +1205,16 @@ async function applyLatest() {
     refinger(state.corrections);
     shown.corrections = correctionsKey;
   }
-  // What is on the stand: the piece, or a sheet (read again when rewritten).
-  const standKey = state.stand ? JSON.stringify([state.stand, state.sheets[state.stand]]) : "";
+  // What is on the stand: the piece, or a sheet (read again when rewritten; its own place moving is a step, not a new sheet).
+  const sheet = state.stand ? state.sheets[state.stand] : null;
+  const standKey = sheet ? JSON.stringify([state.stand, sheet.title, sheet.xml, sheet.rests]) : "";
   if (standKey !== shown.stand) {
     if (shown.stand !== undefined) {
       stopTransport();
       player.stop();
     }
     shown.stand = standKey;
-    takeStand(state.stand, state.stand ? state.sheets[state.stand] : null);
+    takeStand(state.stand, sheet);
     refingered = true;
   }
   await showNotation();
